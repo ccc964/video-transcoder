@@ -35,6 +35,7 @@ class App:
         self.stop_event_rec = threading.Event()
         self.rec_start = 0.0
         self.probe_worker = None
+        self._probe_room = None          # 最近一次解析结果（供「复制推流地址」用）
         self.dl_worker = None
         self.stop_event_dl = threading.Event()
         self.cfg = core.load_config(core.app_dir())
@@ -275,6 +276,26 @@ class App:
                    padx=padx(10), pady=(padx(2), 0))
         self.btn_probe = ttk.Button(row_p, text="解析画质", command=self._probe_rec_source)
         self.btn_probe.pack(side="left")
+
+        # ---- 一键复制推流地址（转播用）----
+        self.btn_copy = ttk.Menubutton(row_p, text="复制推流地址")
+        menu = tk.Menu(self.btn_copy, tearoff=0)
+        menu.add_command(label="复制 FLV 地址（当前画质）",
+                         command=lambda: self._copy_stream("flv"))
+        menu.add_command(label="复制 HLS(m3u8) 地址（当前画质）",
+                         command=lambda: self._copy_stream("hls"))
+        menu.add_separator()
+        menu.add_command(label="复制该画质 FLV + HLS（两行）",
+                         command=lambda: self._copy_stream("both"))
+        menu.add_command(label="复制全部画质（FLV）",
+                         command=lambda: self._copy_stream("flv", all_qualities=True))
+        menu.add_command(label="复制全部画质（HLS）",
+                         command=lambda: self._copy_stream("hls", all_qualities=True))
+        self.btn_copy["menu"] = menu
+        self.btn_copy.pack(side="left", padx=padx(6))
+        self.btn_copy.state(["disabled"])
+        self.var_url.trace_add("write", lambda *_: self._invalidate_probe())
+
         ttk.Label(row_p, text="录制画质：").pack(side="left", padx=(padx(12), 0))
         self.var_quality = tk.StringVar(value=core.AUTO_QUALITY)
         self.cmb_quality = ttk.Combobox(row_p, textvariable=self.var_quality,
@@ -285,7 +306,8 @@ class App:
         self.lbl_probe.pack(side="left", padx=padx(10))
 
         ttk.Label(r, text="（填抖音地址时点一下「解析画质」可看到主播与画质档位；"
-                          "直链地址无需解析，直接录制）",
+                          "直链地址无需解析，直接录制。解析后「复制推流地址」"
+                          "可一键拷走地址用于转播）",
                   foreground="#888888").grid(
             row=3, column=0, columnspan=2, sticky="w", padx=padx(10), pady=(padx(2), 0))
 
@@ -365,10 +387,14 @@ class App:
             messagebox.showinfo("提示", "请先填直播源地址")
             return
         if not core.is_douyin_input(url):
+            self._probe_room = None
             self.lbl_probe.config(text="非抖音地址，直接录制", foreground="#1a7a3c")
+            self.btn_copy.state(["!disabled"])      # 直链可直接复制
             return
         if self.probe_worker and self.probe_worker.is_alive():
             return
+        self._probe_room = None
+        self.btn_copy.state(["disabled"])
         self.btn_probe.config(state="disabled")
         self.lbl_probe.config(text="解析中…", foreground="#888888")
         self.probe_worker = threading.Thread(target=self._work_probe, args=(url,), daemon=True)
@@ -383,11 +409,17 @@ class App:
 
     def _apply_probe(self, room):
         """把探测结果填进画质下拉框和状态标签。"""
+        self._probe_room = room
         avail = (room or {}).get("available") or []
         values = [core.AUTO_QUALITY] + avail
         self.cmb_quality.config(values=values)
         if self.var_quality.get() not in values:
             self.var_quality.set(values[0] if avail else core.AUTO_QUALITY)
+        # 只要有地址就允许复制（未开播时可能是上一场的缓存地址）
+        if core.stream_urls_all(room, "flv") or core.stream_urls_all(room, "hls"):
+            self.btn_copy.state(["!disabled"])
+        else:
+            self.btn_copy.state(["disabled"])
         nick = room.get("nickname") or "未知主播"
         if room.get("is_live"):
             text = f"✓ {nick} · 直播中 · {len(avail)} 档画质"
@@ -397,6 +429,84 @@ class App:
             if avail:
                 text += f" · 已缓存 {len(avail)} 档地址"
             self.lbl_probe.config(text=text, foreground="#c0392b")
+
+    # ---------- 一键复制推流地址（转播用）----------
+
+    def _invalidate_probe(self):
+        """地址框一改，之前解析的结果就作废，避免复制到旧地址。"""
+        self._probe_room = None
+        if getattr(self, "btn_copy", None) is not None:
+            self.btn_copy.state(["disabled"])
+
+    def _set_clipboard(self, text):
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        self.root.update()          # 让内容立刻写进剪贴板
+
+    def _copy_stream(self, proto="flv", all_qualities=False):
+        """把推流地址复制到剪贴板。proto: flv / hls / both。"""
+        url_in = self.var_url.get().strip()
+        if not url_in:
+            messagebox.showinfo("提示", "请先填直播源地址")
+            return
+
+        room = self._probe_room
+        if room is None:
+            if core.is_douyin_input(url_in):
+                messagebox.showinfo("提示",
+                                    "请先点「解析画质」。\n"
+                                    "解析成功后按钮才会亮起，才能拿到真实推流地址。")
+                return
+            # 非抖音直链：原样复制
+            self._set_clipboard(url_in)
+            self._qlog(f"已复制直链地址：{url_in}")
+            return
+
+        quality = self.var_quality.get()
+
+        # 全部画质（指定协议）
+        if all_qualities:
+            urls = core.stream_urls_all(room, proto)
+            if not urls:
+                messagebox.showwarning("提示", f"该直播源没有 {proto.upper()} 地址。")
+                return
+            text = "\n".join(urls.values())
+            self._set_clipboard(text)
+            self._qlog(f"已复制全部 {proto.upper()} 地址（{len(urls)} 档）：")
+            for q, u in urls.items():
+                self._qlog(f"    {q}: {u}")
+            return
+
+        # 当前画质，flv + hls 两个都取
+        if proto == "both":
+            pairs = [(p, *core.stream_url_for(room, quality, p)) for p in ("flv", "hls")]
+            hit = [(p, q, u) for p, q, u in pairs if u]
+            if not hit:
+                self._show_no_url(room, quality)
+                return
+            self._set_clipboard("\n".join(u for _, _, u in hit))
+            self._qlog(f"已复制推流地址（{len(hit)} 条，各占一行）：")
+            for p, q, u in hit:
+                self._qlog(f"    {p.upper()} [{q}]: {u}")
+            return
+
+        # 当前画质，单一协议
+        q, url = core.stream_url_for(room, quality, proto)
+        if not url:
+            self._show_no_url(room, quality, proto)
+            return
+        self._set_clipboard(url)
+        self._qlog(f"已复制 {proto.upper()} 地址（{q}）：{url}")
+
+    def _show_no_url(self, room, quality, proto=None):
+        """取不到地址时给出「到底有哪些可选」的明确提示。"""
+        want = quality if quality != core.AUTO_QUALITY else "自动"
+        lines = [f"没取到地址（协议 {proto.upper() if proto else 'FLV/HLS'}，画质 {want}）。"]
+        for p in ("flv", "hls"):
+            names = list(core.stream_urls_all(room, p).keys())
+            lines.append(f"  {p.upper()} 可用画质：{'、'.join(names) if names else '无'}")
+        lines.append("提示：下拉框选「自动」或换一档画质再试。")
+        messagebox.showwarning("提示", "\n".join(lines))
 
     # ---------- 录制 ----------
 
@@ -805,6 +915,8 @@ class App:
                     if ok and payload:
                         self._apply_probe(payload)
                     else:
+                        self._probe_room = None
+                        self.btn_copy.state(["disabled"])
                         self.lbl_probe.config(text=f"解析失败：{str(payload)[:60]}",
                                               foreground="#c0392b")
                 elif kind == "probed":

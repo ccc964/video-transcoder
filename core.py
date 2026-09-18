@@ -406,6 +406,39 @@ def probe_live_room(url, on_log=None):
     return room
 
 
+def stream_url_for(room, quality=None, proto="flv"):
+    """取「指定协议 + 指定画质」的推流地址（供一键复制用）。
+
+    与 pick_url 的区别：**严格不跨协议回退**。转播要的是明确的一种协议，
+    拿 flv 却回退成 m3u8 会让人以为复制错了。
+
+    - quality 为 None / 「自动」 → 该协议里的最高画质
+    - 返回 (画质名, 地址)；该协议里没有就返回 (None, None)
+    """
+    table = ((room or {}).get("streams") or {}).get(proto) or {}
+    if not table:
+        return None, None
+    name = normalize_quality(quality)
+    if name:
+        url = table.get(name)
+        return (name, url) if url else (None, None)
+    for q in douyin.QUALITY_ORDER:
+        if q in table:
+            return q, table[q]
+    q, url = next(iter(table.items()))
+    return q, url
+
+
+def stream_urls_all(room, proto="flv"):
+    """该协议下的全部画质 → 地址，按清晰度从高到低。没有则返回空 dict。"""
+    table = ((room or {}).get("streams") or {}).get(proto) or {}
+    if not table:
+        return {}
+    ordered = [q for q in douyin.QUALITY_ORDER if q in table]
+    ordered += sorted(q for q in table if q not in douyin.QUALITY_ORDER)
+    return {q: table[q] for q in ordered}
+
+
 def prepare_record_source(url, quality=None, wait=False, interval=30, timeout=0,
                           stop_event=None, on_log=None, prefer="flv"):
     """把录制输入统一解析成可录制的推流地址。

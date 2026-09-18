@@ -44,6 +44,22 @@ def smoke(report_path):
         return "直链透传正常"
     check("record-source-passthrough", _resolve)
 
+    def _copy_pick():
+        """「复制推流地址」的取址逻辑：必须严格不跨协议回退。"""
+        room = {"streams": {
+            "flv": {"高清 (HD)": "http://a/x.flv"},
+            "hls": {"高清 (HD)": "http://a/x.m3u8", "标清 (SD)": "http://a/y.m3u8"},
+        }}
+        assert core.stream_url_for(room, "高清 (HD)", "flv") == ("高清 (HD)", "http://a/x.flv")
+        # 要 flv 但只有 hls 有这档 -> 必须返回空，不能悄悄给 m3u8
+        assert core.stream_url_for(room, "标清 (SD)", "flv") == (None, None)
+        # 自动 -> 取该协议最高档
+        assert core.stream_url_for(room, core.AUTO_QUALITY, "flv")[1] == "http://a/x.flv"
+        assert len(core.stream_urls_all(room, "hls")) == 2
+        assert core.stream_urls_all(None, "flv") == {}
+        return "取址正常（且不跨协议回退）"
+    check("copy-source-pick", _copy_pick)
+
     def _ffmpeg():
         p = core.find_ffmpeg()
         if not p:
