@@ -1,6 +1,6 @@
 # 视频转码 + 直播录制
 
-基于 ffmpeg 的视频批量转码/转封装 + 直播源录制工具。**交付只要一个 exe（12MB）**，
+基于 ffmpeg 的视频批量转码/转封装 + 直播源录制工具。**交付只要一个 exe（11.5MB）**，
 换电脑拷过去双击即用，首次运行点一下「一键下载 ffmpeg」即可（约 82MB，实测 8 秒下完）。
 
 **直播录制支持抖音直播间直接开录**：粘贴直播间链接、房间号、App 分享短链或用户主页链接，
@@ -14,7 +14,7 @@
 
 **直接下载 exe（推荐，无需 Python）**
 
-👉 [VideoTranscoder.exe](https://github.com/ccc964/video-transcoder/releases/latest/download/VideoTranscoder.exe)（12.4 MB）
+👉 [VideoTranscoder.exe](https://github.com/ccc964/video-transcoder/releases/latest/download/VideoTranscoder.exe)（v2.1，11.5 MB）
 
 首次运行点界面上的「一键下载 ffmpeg」即可，不需要单独装 Python 或 ffmpeg。
 
