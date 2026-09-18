@@ -72,6 +72,39 @@ def smoke(report_path):
         return f"history 往返正常（{len(got)} 条）"
     check("config-roundtrip", _history_cfg)
 
+    def _ui_kit():
+        """圆角控件要能顶替 ttk.Button —— 调用处大量使用 state()/config()/cget()。"""
+        import ui
+        import tkinter as tk
+        r = tk.Tk()
+        r.withdraw()
+        try:
+            b = ui.RoundButton(r, text="测试", kind="accent")
+            assert b.cget("text") == "测试"
+            assert b.state() == ()
+            b.state(["disabled"])
+            assert "disabled" in b.state()
+            b.state(["!disabled"])
+            assert "disabled" not in b.state()
+            b.config(state="disabled")
+            assert "disabled" in b.state()
+            b.config(state="normal", text="改了")
+            assert b.cget("text") == "改了" and b.state() == ()
+            # TabBar 要能顶替 ttk.Notebook 的 select()/tabs()
+            bar = ui.TabBar(r)
+            pages = []
+            for t in ("一", "二"):
+                f = tk.Frame(bar.body)
+                pages.append(f)
+                bar.add(f, text=t)
+            bar.select(1)
+            assert bar.select() == 1 and len(bar.tabs()) == 2
+            assert r.nametowidget(bar.tabs()[1]) is pages[1]
+            return "RoundButton / TabBar 接口兼容"
+        finally:
+            r.destroy()
+    check("ui-kit-api", _ui_kit)
+
     def _ffmpeg():
         p = core.find_ffmpeg()
         if not p:

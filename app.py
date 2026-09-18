@@ -23,22 +23,11 @@ MODE_LABELS = [
 ]
 
 # ------------------------------------------------------------------ 配色
-# 浅色扁平风格：窗口底灰、卡片纯白 + 1px 描边，靠留白和层次代替立体感。
-C_BG = "#eff1f5"          # 窗口底色
-C_CARD = "#ffffff"        # 卡片底
-C_CARD_ALT = "#f7f9fc"    # 卡片内嵌区（日志、次级区块）
-C_BORDER = "#dde1e8"      # 描边
-C_TEXT = "#1f2328"        # 主文字
-C_MUTED = "#6b7280"       # 次要文字
-C_ACCENT = "#2f6fed"      # 主色
-C_ACCENT_D = "#2158c9"    # 主色按下
-C_ACCENT_SOFT = "#e8effd" # 主色浅底
-C_OK = "#14804a"
-C_ERR = "#c0392b"
-C_WARN = "#a15c00"
-C_SEL = "#d6e4ff"
-
-FONT = "Microsoft YaHei UI"
+# 配色与圆角控件都在 ui.py 里，这里直接复用，避免两处维护
+import ui
+from ui import (C_ACCENT, C_ACCENT_D, C_ACCENT_SOFT, C_BG, C_BORDER, C_CARD,
+                C_CARD_ALT, C_DISABLED_BG, C_DISABLED_FG, C_ERR, C_MUTED,
+                C_OK, C_SEL, C_TEXT, C_WARN, FONT)
 
 
 class App:
@@ -87,9 +76,22 @@ class App:
 
     def _auto_size(self):
         self.root.update_idletasks()
+        # ttk.Notebook 只申报「当前页」的需求尺寸，而两个页签高度不一样。
+        # 必须挨个切一遍取最大值，否则按矮的那页定窗口，切到高的那页就会
+        # 凭空冒出滚动条（切页只发生在窗口显示前，不会有闪烁）。
+        cur = self.nb.select()
+        need = self.root.winfo_reqheight()
+        try:
+            for i in range(len(self.nb.tabs())):
+                self.nb.select(i)
+                self.root.update_idletasks()
+                need = max(need, self.root.winfo_reqheight())
+        finally:
+            self.nb.select(cur)
+            self.root.update_idletasks()
         s = self.scale
         need_w = max(self.root.winfo_reqwidth(), int(1000 * s))
-        need_h = max(self.root.winfo_reqheight(), int(780 * s))
+        need_h = max(need, int(750 * s))
         w = min(need_w + 24, self.root.winfo_screenwidth() - 60)
         h = min(need_h + 24, self.root.winfo_screenheight() - 110)
         self.root.geometry(f"{w}x{h}")
@@ -98,6 +100,7 @@ class App:
         """统一字体与控件外观（clam 主题 + 手工调色，零额外依赖）。"""
         s = self.scale
         px = lambda v: int(v * s)
+        ui.set_scale(self.scale)      # 圆角控件默认按这个缩放
         st = ttk.Style(self.root)
         try:
             st.theme_use("clam")          # clam 最容易改色，vista 主题改不动
@@ -126,50 +129,8 @@ class App:
                      font=(FONT, 8))
 
         # ---- 按钮 ----
-        st.configure("TButton", font=(FONT, 9), padding=(px(12), px(5)),
-                     background=C_CARD, foreground=C_TEXT,
-                     bordercolor=C_BORDER, lightcolor=C_CARD, darkcolor=C_CARD,
-                     focuscolor=C_CARD, relief="flat")
-        st.map("TButton",
-               background=[("disabled", C_CARD_ALT), ("pressed", C_ACCENT_SOFT),
-                           ("active", C_ACCENT_SOFT)],
-               foreground=[("disabled", "#a8adb6")],
-               bordercolor=[("active", C_ACCENT)])
-
-        st.configure("Accent.TButton", background=C_ACCENT, foreground="#ffffff",
-                     bordercolor=C_ACCENT, lightcolor=C_ACCENT, darkcolor=C_ACCENT,
-                     focuscolor=C_ACCENT)
-        st.map("Accent.TButton",
-               background=[("disabled", "#b9c6df"), ("pressed", C_ACCENT_D),
-                           ("active", C_ACCENT_D)],
-               foreground=[("disabled", "#f2f5fa")],
-               bordercolor=[("disabled", "#b9c6df")])
-
-        st.configure("Ghost.TButton", background=C_CARD_ALT, foreground=C_TEXT,
-                     bordercolor=C_BORDER, lightcolor=C_CARD_ALT,
-                     darkcolor=C_CARD_ALT, focuscolor=C_CARD_ALT)
-        st.map("Ghost.TButton",
-               background=[("pressed", C_ACCENT_SOFT), ("active", C_ACCENT_SOFT)],
-               foreground=[("disabled", "#a8adb6")])
-
-        # 历史主播快捷按钮：小圆润芯片样式
-        st.configure("Chip.TButton", font=(FONT, 9), padding=(px(10), px(4)),
-                     background=C_ACCENT_SOFT, foreground=C_ACCENT_D,
-                     bordercolor="#c7d8fb", lightcolor=C_ACCENT_SOFT,
-                     darkcolor=C_ACCENT_SOFT, focuscolor=C_ACCENT_SOFT)
-        st.map("Chip.TButton",
-               background=[("pressed", "#cfdffd"), ("active", "#dbe7ff")],
-               foreground=[("disabled", "#a8adb6")])
-
-        st.configure("TMenubutton", font=(FONT, 9), padding=(px(12), px(5)),
-                     background=C_CARD, foreground=C_TEXT,
-                     bordercolor=C_BORDER, lightcolor=C_CARD, darkcolor=C_CARD,
-                     focuscolor=C_CARD, relief="flat", arrowcolor=C_MUTED)
-        st.map("TMenubutton",
-               background=[("disabled", C_CARD_ALT), ("pressed", C_ACCENT_SOFT),
-                           ("active", C_ACCENT_SOFT)],
-               foreground=[("disabled", "#a8adb6")],
-               bordercolor=[("active", C_ACCENT)])
+        # 按钮已全部换成 ui.RoundButton（Canvas 自绘圆角），ttk 的 TButton /
+        # Accent.TButton / Ghost.TButton / Chip.TButton / TMenubutton 样式不再需要。
 
         # ---- 输入 ----
         st.configure("TEntry", font=(FONT, 9), padding=(px(6), px(4)),
@@ -195,25 +156,22 @@ class App:
         self.root.option_add("*TCombobox*Listbox.borderWidth", 0)
 
         # ---- 勾选 / 单选 ----
+        # clam 默认把「已勾选」画成一个粗体「✗」，小尺寸下很扎眼。这里用自绘的
+        # 圆角指示器图片替换（主色底 + 白勾）；PIL 不可用时自动退回默认样式。
+        if not ui.install_indicators(st, self.scale, master=self.root):
+            st.map("TCheckbutton",
+                   indicatorbackground=[("selected", C_ACCENT),
+                                        ("!selected", C_CARD)],
+                   indicatorforeground=[("selected", "#ffffff"),
+                                        ("!selected", C_MUTED)])
         st.configure("TCheckbutton", background=C_CARD, foreground=C_TEXT,
-                     font=(FONT, 9), focuscolor=C_CARD, relief="flat")
-        st.map("TCheckbutton", background=[("active", C_CARD)],
-               indicatorcolor=[("selected", C_ACCENT), ("!selected", C_CARD)])
+                     font=(FONT, 9), focuscolor=C_CARD, relief="flat",
+                     padding=(0, px(2)))
+        st.map("TCheckbutton", background=[("active", C_CARD)])
         st.configure("TRadiobutton", background=C_CARD, foreground=C_TEXT,
-                     font=(FONT, 9), focuscolor=C_CARD)
-        st.map("TRadiobutton", background=[("active", C_CARD)],
-               indicatorcolor=[("selected", C_ACCENT), ("!selected", C_CARD)])
-
-        # ---- 页签 ----
-        st.configure("TNotebook", background=C_BG, bordercolor=C_BORDER,
-                     tabmargins=(px(6), px(6), 0, 0), relief="flat")
-        st.configure("TNotebook.Tab", font=(FONT, 10), padding=(px(20), px(8)),
-                     background=C_BG, foreground=C_MUTED,
-                     bordercolor=C_BG, lightcolor=C_BG, darkcolor=C_BG)
-        st.map("TNotebook.Tab",
-               background=[("selected", C_CARD), ("active", "#e4e8ef")],
-               foreground=[("selected", C_ACCENT), ("active", C_TEXT)],
-               expand=[("selected", (0, 0, 0, 0))])
+                     font=(FONT, 9), focuscolor=C_CARD, relief="flat",
+                     padding=(0, px(2)))
+        st.map("TRadiobutton", background=[("active", C_CARD)])
 
         # ---- 表格 ----
         st.configure("Treeview", font=(FONT, 9), rowheight=px(24),
@@ -250,15 +208,10 @@ class App:
     # ---------- 布局小工具 ----------
 
     def _card(self, parent, pad=None):
-        """一张白卡片：白底 + 1px 描边（tk.Frame 才改得动描边颜色）。"""
+        """一张圆角白卡片；内容放进返回值的 .inner。"""
         s = self.scale
-        pad = pad if pad is not None else int(9 * s)
-        outer = tk.Frame(parent, bg=C_CARD, highlightbackground=C_BORDER,
-                         highlightthickness=1, bd=0)
-        inner = tk.Frame(outer, bg=C_CARD)
-        inner.pack(fill="both", expand=True, padx=pad, pady=pad)
-        outer.inner = inner
-        return outer
+        pad = pad if pad is not None else int(8 * s)
+        return ui.RoundCard(parent, pad=pad, radius=int(12 * s), scale=s)
 
     def _section(self, parent, text, hint=""):
         """卡片内的小标题行，返回 (行容器, 内容容器)。"""
@@ -296,6 +249,7 @@ class App:
 
         canvas = tk.Canvas(wrap, bg=C_BG, highlightthickness=0, bd=0,
                            height=px(min_h), yscrollincrement=px(20))
+        canvas._vt_scroll = True        # 标记，方便测试定位（tab 里也有别的 Canvas）
         vs = ttk.Scrollbar(wrap, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=vs.set)
         vs.pack(side="right", fill="y")
@@ -313,6 +267,11 @@ class App:
                 # 用 reqheight（内容自然高度）而不是 bbox，避免「设高→bbox 变化→
                 # 再设高」的自激循环
                 natural = inner.winfo_reqheight()
+                # 把内容高度申报给布局：这样窗口会按「最高的那个页签」自动定尺寸，
+                # 空间够时就不会凭空冒出滚动条（上限防止超长内容把窗口撑爆）
+                want_req = min(natural, px(900))
+                if int(canvas.cget("height") or 0) != want_req:
+                    canvas.configure(height=want_req)
                 cw, ch = canvas.winfo_width(), canvas.winfo_height()
                 want_h = max(natural, ch)
                 if canvas.itemcget(win, "width") != str(cw):
@@ -343,7 +302,7 @@ class App:
 
         # ==================== 顶部：标题 + ffmpeg ====================
         head = self._card(self.root)
-        head.pack(fill="x", padx=px(12), pady=(px(12), px(8)))
+        head.pack(fill="x", padx=px(12), pady=(px(10), px(8)))
         h = head.inner
 
         titlerow = tk.Frame(h, bg=C_CARD)
@@ -358,13 +317,13 @@ class App:
         ffrow = tk.Frame(h, bg=C_CARD)
         ffrow.pack(fill="x")
         ttk.Label(ffrow, text="ffmpeg", style="Card.TLabel").pack(side="left")
-        ttk.Entry(ffrow, textvariable=self.var_ffmpeg).pack(
+        ui.RoundEntry(ffrow, textvariable=self.var_ffmpeg).pack(
             side="left", fill="x", expand=True, padx=(px(8), px(8)))
-        ttk.Button(ffrow, text="浏览…", style="Ghost.TButton",
+        ui.RoundButton(ffrow, text="浏览…", kind="ghost",
                    command=self._pick_ffmpeg).pack(side="left", padx=px(2))
-        ttk.Button(ffrow, text="自动检测", style="Ghost.TButton",
+        ui.RoundButton(ffrow, text="自动检测", kind="ghost",
                    command=self._detect_ffmpeg_bg).pack(side="left", padx=px(2))
-        self.btn_ff = ttk.Button(ffrow, text="一键下载 ffmpeg", style="Accent.TButton",
+        self.btn_ff = ui.RoundButton(ffrow, text="一键下载 ffmpeg", kind="accent",
                                  command=self._install_ffmpeg_bg)
         self.btn_ff.pack(side="left", padx=px(2))
         self.lbl_ff = ttk.Label(ffrow, text="检测中…", style="CardHint.TLabel")
@@ -373,10 +332,10 @@ class App:
         # ==================== 页签 ====================
         # 注意：这里只创建、不 pack —— pack 顺序决定「窗口不够高时谁先让位」，
         # 要先 pack 底部的日志卡，再让页签去占剩余空间（见下方）。
-        self.nb = ttk.Notebook(self.root)
-        tab1 = ttk.Frame(self.nb, style="Tab.TFrame")
+        self.nb = ui.TabBar(self.root)
+        tab1 = ttk.Frame(self.nb.body, style="Tab.TFrame")
         self.nb.add(tab1, text="  视频转码  ")
-        tab2 = ttk.Frame(self.nb, style="Tab.TFrame")
+        tab2 = ttk.Frame(self.nb.body, style="Tab.TFrame")
         self.nb.add(tab2, text="  直播录制  ")
 
         # ---------------- 页签 1：转码 ----------------
@@ -386,7 +345,7 @@ class App:
         mid.rowconfigure(0, weight=1)
 
         left = self._card(mid)
-        left.grid(row=0, column=0, sticky="nsew", padx=(px(10), px(6)), pady=px(10))
+        left.grid(row=0, column=0, sticky="nsew", padx=(px(10), px(6)), pady=px(8))
         lf = left.inner
         self._section(lf, "文件列表", "支持把视频直接拖进窗口")
         treewrap = tk.Frame(lf, bg=C_CARD)
@@ -406,16 +365,16 @@ class App:
 
         btns = tk.Frame(lf, bg=C_CARD)
         btns.pack(fill="x", pady=(px(10), 0))
-        ttk.Button(btns, text="添加文件", command=self._add_files).pack(side="left")
-        ttk.Button(btns, text="添加文件夹", command=self._add_folder).pack(
+        ui.RoundButton(btns, text="添加文件", command=self._add_files).pack(side="left")
+        ui.RoundButton(btns, text="添加文件夹", command=self._add_folder).pack(
             side="left", padx=px(6))
-        ttk.Button(btns, text="移除选中", style="Ghost.TButton",
+        ui.RoundButton(btns, text="移除选中", kind="ghost",
                    command=self._remove_sel).pack(side="left")
-        ttk.Button(btns, text="清空", style="Ghost.TButton",
+        ui.RoundButton(btns, text="清空", kind="ghost",
                    command=self._clear_all).pack(side="left", padx=px(6))
 
         right = self._card(mid)
-        right.grid(row=0, column=1, sticky="nsew", padx=(px(6), px(10)), pady=px(10))
+        right.grid(row=0, column=1, sticky="nsew", padx=(px(6), px(10)), pady=px(8))
         rf = right.inner
 
         self._section(rf, "转码模式")
@@ -431,8 +390,8 @@ class App:
         self._section(rf, "质量", "CQ/CRF，越小越清晰")
         qrow = tk.Frame(rf, bg=C_CARD)
         qrow.pack(fill="x", pady=(px(8), 0))
-        self.scl_cq = ttk.Scale(qrow, from_=16, to=32, variable=self.var_cq,
-                                command=self._cq_changed)
+        self.scl_cq = ui.RoundSlider(qrow, variable=self.var_cq, from_=16, to=32,
+                                     command=self._cq_changed)
         self.scl_cq.pack(side="left", fill="x", expand=True)
         self.lbl_cq = ttk.Label(qrow, text="23", style="Card.TLabel", width=4,
                                 anchor="e")
@@ -452,9 +411,9 @@ class App:
         drows = tk.Frame(rf, bg=C_CARD)
         drows.pack(fill="x", pady=(px(8), 0))
         ttk.Label(drows, text="目录", style="Card.TLabel").pack(side="left")
-        ttk.Entry(drows, textvariable=self.var_outdir).pack(
+        ui.RoundEntry(drows, textvariable=self.var_outdir).pack(
             side="left", fill="x", expand=True, padx=(px(8), px(4)))
-        ttk.Button(drows, text="…", width=3, style="Ghost.TButton",
+        ui.RoundButton(drows, text="…", width=34, kind="ghost",
                    command=self._pick_outdir).pack(side="left")
         ttk.Label(rf, text="留空 = 与源文件同目录", style="CardHint.TLabel").pack(
             anchor="w", pady=(px(4), 0))
@@ -468,14 +427,14 @@ class App:
         # ==================== 底部：日志 ====================
         # 先 pack 底部，保证窗口再矮也不会把日志挤没（由中间的页签先让位）
         bottom = self._card(self.root)
-        bottom.pack(side="bottom", fill="x", padx=px(12), pady=(px(6), px(10)))
+        bottom.pack(side="bottom", fill="x", padx=px(12), pady=(px(6), px(8)))
         bf = bottom.inner
         row_b = tk.Frame(bf, bg=C_CARD)
         row_b.pack(fill="x")
-        self.btn_start = ttk.Button(row_b, text="开始转换", style="Accent.TButton",
+        self.btn_start = ui.RoundButton(row_b, text="开始转换", kind="accent",
                                     command=self._start)
         self.btn_start.pack(side="left")
-        self.btn_stop = ttk.Button(row_b, text="停止", style="Ghost.TButton",
+        self.btn_stop = ui.RoundButton(row_b, text="停止", kind="ghost",
                                    command=self._stop, state="disabled")
         self.btn_stop.pack(side="left", padx=px(8))
         self.lbl_state = ttk.Label(row_b, text="就绪", style="Card.TLabel")
@@ -485,7 +444,7 @@ class App:
 
         logwrap = tk.Frame(bf, bg=C_BORDER, highlightthickness=0)
         logwrap.pack(fill="x", pady=(px(8), 0))
-        self.txt = tk.Text(logwrap, height=6, state="disabled", wrap="none",
+        self.txt = tk.Text(logwrap, height=5, state="disabled", wrap="none",
                            font=(FONT, 9), bg=C_CARD_ALT, fg=C_TEXT,
                            relief="flat", bd=0, padx=px(8), pady=px(6),
                            insertbackground=C_TEXT, selectbackground=C_SEL,
@@ -581,7 +540,7 @@ class App:
 
         # ============ 卡片 1：直播源 ============
         c1 = self._card(r)
-        c1.pack(fill="x", padx=px(10), pady=(px(10), px(8)))
+        c1.pack(fill="x", padx=px(10), pady=(px(9), px(6)))
         f1 = c1.inner
         self._section(f1, "直播源", "抖音直播间链接 / 房间号 / 分享短链 / 主页链接，"
                                     "或 m3u8 / flv / mp4 直链 / rtmp")
@@ -589,16 +548,16 @@ class App:
         self.var_url = tk.StringVar()
         urow = tk.Frame(f1, bg=C_CARD)
         urow.pack(fill="x", pady=(px(8), 0))
-        ttk.Entry(urow, textvariable=self.var_url).pack(fill="x")
+        ui.RoundEntry(urow, textvariable=self.var_url).pack(fill="x")
 
         row_p = tk.Frame(f1, bg=C_CARD)
         row_p.pack(fill="x", pady=(px(8), 0))
-        self.btn_probe = ttk.Button(row_p, text="解析画质", style="Accent.TButton",
+        self.btn_probe = ui.RoundButton(row_p, text="解析画质", kind="accent",
                                     command=self._probe_rec_source)
         self.btn_probe.pack(side="left")
 
         # ---- 一键复制推流地址（转播用）----
-        self.btn_copy = ttk.Menubutton(row_p, text="复制推流地址")
+        self.btn_copy = ui.RoundMenubutton(row_p, text="复制推流地址")
         menu = self._menu(self.btn_copy)
         menu.add_command(label="复制 FLV 地址（当前画质）",
                          command=lambda: self._copy_stream("flv"))
@@ -630,14 +589,14 @@ class App:
 
         # ============ 卡片 2：常看主播（解析历史快捷入口）============
         c2 = self._card(r)
-        c2.pack(fill="x", padx=px(10), pady=(0, px(8)))
+        c2.pack(fill="x", padx=px(10), pady=(0, px(6)))
         f2 = c2.inner
         hrow = tk.Frame(f2, bg=C_CARD)
         hrow.pack(fill="x")
         ttk.Label(hrow, text="常看主播", style="CardTitle.TLabel").pack(side="left")
         ttk.Label(hrow, text="点一下自动填入并重新解析（推流地址有时效，必须重新解析）",
                   style="CardHint.TLabel").pack(side="left", padx=(px(8), 0))
-        self.btn_hist_more = ttk.Menubutton(hrow, text="全部记录")
+        self.btn_hist_more = ui.RoundMenubutton(hrow, text="全部记录")
         hm = self._menu(self.btn_hist_more)
         self.btn_hist_more["menu"] = hm
         self.btn_hist_more.pack(side="right")
@@ -649,7 +608,7 @@ class App:
 
         # ============ 卡片 3：保存与选项 ============
         c3 = self._card(r)
-        c3.pack(fill="x", padx=px(10), pady=(0, px(8)))
+        c3.pack(fill="x", padx=px(10), pady=(0, px(6)))
         f3 = c3.inner
         self._section(f3, "录制设置")
 
@@ -657,9 +616,9 @@ class App:
         drow.pack(fill="x", pady=(px(8), 0))
         ttk.Label(drow, text="保存到", style="Card.TLabel").pack(side="left")
         self.var_rec_dst = tk.StringVar()
-        ttk.Entry(drow, textvariable=self.var_rec_dst).pack(
+        ui.RoundEntry(drow, textvariable=self.var_rec_dst).pack(
             side="left", fill="x", expand=True, padx=(px(8), px(4)))
-        ttk.Button(drow, text="…", width=3, style="Ghost.TButton",
+        ui.RoundButton(drow, text="…", width=34, kind="ghost",
                    command=self._pick_rec_dst).pack(side="left")
 
         # 提示和「最长录制」并成一行，省纵向空间
@@ -710,14 +669,14 @@ class App:
 
         # ============ 操作条 ============
         c4 = self._card(r)
-        c4.pack(fill="x", padx=px(10), pady=(0, px(10)))
+        c4.pack(fill="x", padx=px(10), pady=(0, px(8)))
         f4 = c4.inner
         row_r = tk.Frame(f4, bg=C_CARD)
         row_r.pack(fill="x")
-        self.btn_rec_start = ttk.Button(row_r, text="开始录制", style="Accent.TButton",
+        self.btn_rec_start = ui.RoundButton(row_r, text="开始录制", kind="accent",
                                         command=self._start_rec)
         self.btn_rec_start.pack(side="left")
-        self.btn_rec_stop = ttk.Button(row_r, text="停止录制", style="Ghost.TButton",
+        self.btn_rec_stop = ui.RoundButton(row_r, text="停止录制", kind="ghost",
                                        command=self._stop_rec, state="disabled")
         self.btn_rec_stop.pack(side="left", padx=px(8))
         self.lbl_rec = ttk.Label(row_r, text="待命", style="Card.TLabel")
@@ -752,12 +711,12 @@ class App:
         for i, item in enumerate(hist[:cols]):
             nick = (item.get("nick") or "").strip() or (item.get("rid") or "未知主播")
             label = nick if len(nick) <= 7 else nick[:7] + "…"
-            b = ttk.Button(self.hist_frame, text=label, style="Chip.TButton",
+            b = ui.RoundButton(self.hist_frame, text=label, kind="chip",
                            command=lambda i=i: self._use_history(i))
             b.grid(row=i // cols, column=i % cols, sticky="w",
                    padx=(0, px(6)), pady=(0, px(6)))
 
-        m = self.btn_hist_more.nametowidget(self.btn_hist_more["menu"])
+        m = self.btn_hist_more.menu
         m.delete(0, "end")
         for i, item in enumerate(hist[:15]):
             nick = (item.get("nick") or "").strip() or "未知主播"
