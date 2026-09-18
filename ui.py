@@ -75,6 +75,168 @@ def round_rect(cv, x1, y1, x2, y2, r, **kw):
     return cv.create_polygon(round_points(x1, y1, x2, y2, r), **kw)
 
 
+# ------------------------------------------------------------------ 抗锯齿圆角
+# Tk 的 Canvas 不做抗锯齿，曲线只能靠像素堆 → 圆角看起来是楼梯。
+# 解法：把四个角做成超采样渲染的 PhotoImage，中间和直边用矩形/直线填。
+# 直边是横平竖直的，本来就不需要抗锯齿；角图尺寸固定，缩放时只是挪位置。
+_CORNER_CACHE = {}
+
+
+def _corner_image(master, r, fill, border, outer, corner, ss=6):
+    """生成一张 (r+1)×(r+1) 的抗锯齿圆角图片。
+
+    corner: "tl" / "tr" / "bl" / "br"
+    """
+    interp = str(getattr(master, "tk", master))
+    key = (interp, r, fill, border, outer, corner)
+    img = _CORNER_CACHE.get(key)
+    if img is not None:
+        return img
+    tile = r + 1
+    img = tk.PhotoImage(master=master, width=tile, height=tile)
+    if not border:
+        border = fill
+    f = _rgb(master, fill)
+    b = _rgb(master, border)
+    o = _rgb(master, outer)
+    cx = cy = r + 0.5          # 圆心在角图内侧
+    r_out = r + 0.5            # 外沿（刚好压在 x=0 / y=0 上）
+    r_in = max(0.0, r - 0.5)   # 内沿（1px 描边）
+    flip_x = corner in ("tr", "br")
+    flip_y = corner in ("bl", "br")
+    rows = []
+    for j in range(tile):
+        row = []
+        for i in range(tile):
+            acc = [0.0, 0.0, 0.0]
+            for sj in range(ss):
+                for si in range(ss):
+                    x = i + (si + 0.5) / ss
+                    y = j + (sj + 0.5) / ss
+                    if flip_x:
+                        x = tile - x
+                    if flip_y:
+                        y = tile - y
+                    d = ((x - cx) ** 2 + (y - cy) ** 2) ** 0.5
+                    if d <= r_in:
+                        col = f
+                    elif d <= r_out:
+                        col = b
+                    else:
+                        col = o
+                    acc[0] += col[0]
+                    acc[1] += col[1]
+                    acc[2] += col[2]
+            k = float(ss * ss)
+            row.append("#%02x%02x%02x" % (int(acc[0] / k + 0.5),
+                                          int(acc[1] / k + 0.5),
+                                          int(acc[2] / k + 0.5)))
+        rows.append("{" + " ".join(row) + "}")
+    img.put(" ".join(rows))
+    _CORNER_CACHE[key] = img
+    return img
+
+
+def clear_cache():
+    """释放缓存的图片（关窗时调，避免持有已销毁解释器的对象）。"""
+    _CORNER_CACHE.clear()
+    _ICON_REF.clear()
+    _font_cache.clear()
+
+
+def draw_round_shape(cv, x1, y1, x2, y2, r, fill, border=None, outer=C_CARD,
+                     tag=None):
+    """在 Canvas 上画一个抗锯齿圆角矩形，返回创建的 item id 列表。
+
+    调用方负责先把自己的旧 item 删掉（RoundButton 用 delete("all")，
+    RoundCard 这类有别的 item 的用 tag 删）。
+    """
+    master = cv
+    # 全部对齐到整数像素：角图必须落在整数坐标上，否则 Tk 取整后会和 1px
+    # 直边描边错开一格，接缝处看着就是毛的
+    x1, y1 = int(round(float(x1))), int(round(float(y1)))
+    x2, y2 = int(round(float(x2))), int(round(float(y2)))
+    w, h = x2 - x1, y2 - y1
+    if w <= 0 or h <= 0:
+        return []
+    r = int(max(0, min(r, w // 2, h // 2)))
+    tags = (tag,) if tag else ()
+    items = []
+    if r <= 1:                                  # 太小就直接方块，不值得做角图
+        items.append(cv.create_rectangle(x1, y1, x2, y2, fill=fill,
+                                         outline=border or fill, width=1,
+                                         tags=tags))
+        return items
+    # 中段实心矩形（角图只负责四角那一小块）
+    items.append(cv.create_rectangle(x1 + r, y1, x2 - r, y2,
+                                     fill=fill, outline="", tags=tags))
+    if h > 2 * r:
+        items.append(cv.create_rectangle(x1, y1 + r, x2, y2 - r,
+                                         fill=fill, outline="", tags=tags))
+    # 直边描边：放在像素行/列的中间（+0.5），1px 线正好填满那一格
+    if border:
+        items.append(cv.create_line(x1 + r, y1 + 0.5, x2 - r, y1 + 0.5,
+                                    fill=border, tags=tags))
+        items.append(cv.create_line(x1 + r, y2 - 0.5, x2 - r, y2 - 0.5,
+                                    fill=border, tags=tags))
+        items.append(cv.create_line(x1 + 0.5, y1 + r, x1 + 0.5, y2 - r,
+                                    fill=border, tags=tags))
+        items.append(cv.create_line(x2 - 0.5, y1 + r, x2 - 0.5, y2 - r,
+                                    fill=border, tags=tags))
+    # 四个角图：tile = r+1，正好覆盖 [x1, x1+r] 这段
+    tile = r + 1
+    for name, px, py in (("tl", x1, y1), ("tr", x2 - tile, y1),
+                         ("bl", x1, y2 - tile), ("br", x2 - tile, y2 - tile)):
+        im = _corner_image(master, r, fill, border, outer, name)
+        items.append(cv.create_image(px, py, image=im, anchor="nw", tags=tags))
+    return items
+
+
+_CIRCLE_CACHE = {}
+
+
+def circle_image(master, d, fill, border=None, outer=C_CARD, width=2, ss=6):
+    """抗锯齿圆形（滑块圆钮、单选钮用）。"""
+    interp = str(getattr(master, "tk", master))
+    key = (interp, d, fill, border, outer, width)
+    img = _CIRCLE_CACHE.get(key)
+    if img is not None:
+        return img
+    n = max(3, int(d))
+    img = tk.PhotoImage(master=master, width=n, height=n)
+    f = _rgb(master, fill)
+    b = _rgb(master, border or fill)
+    o = _rgb(master, outer)
+    c = n / 2.0
+    r_out = c - 0.5
+    r_in = max(0.0, r_out - max(0, width) / 2.0)
+    rows = []
+    for j in range(n):
+        row = []
+        for i in range(n):
+            acc = [0.0, 0.0, 0.0]
+            for sj in range(ss):
+                for si in range(ss):
+                    x = i + (si + 0.5) / ss
+                    y = j + (sj + 0.5) / ss
+                    dd = ((x - c) ** 2 + (y - c) ** 2) ** 0.5
+                    if border and dd > r_in:
+                        col = b if dd <= r_out else o
+                    else:
+                        col = f if dd <= r_out else o
+                    acc[0] += col[0]
+                    acc[1] += col[1]
+                    acc[2] += col[2]
+            k = float(ss * ss)
+            row.append("#%02x%02x%02x" % (int(acc[0] / k + 0.5),
+                                          int(acc[1] / k + 0.5),
+                                          int(acc[2] / k + 0.5)))
+        rows.append("{" + " ".join(row) + "}")
+    img.put(" ".join(rows))
+    _CIRCLE_CACHE[key] = img
+    return img
+
+
 # ------------------------------------------------------------------ 圆角卡片
 class RoundCard(tk.Canvas):
     """圆角白卡片。内容放进 ``card.inner``（一个普通 Frame）。"""
@@ -90,8 +252,7 @@ class RoundCard(tk.Canvas):
         self._radius = max(0, radius)
         self._bg = bg
         self._border = border
-        self._rect = round_rect(self, 0, 0, 1, 1, self._radius,
-                                fill=bg, outline=border, width=1)
+        self._outer = outer_bg
         self.inner = tk.Frame(self, bg=bg)
         self._win = self.create_window(pad, pad, window=self.inner, anchor="nw")
         self._lock = False
@@ -105,8 +266,12 @@ class RoundCard(tk.Canvas):
         try:
             w = max(2, self.winfo_width())
             h = max(2, self.winfo_height())
-            self.coords(self._rect, *round_points(0.5, 0.5, w - 0.5, h - 0.5,
-                                                  self._radius))
+            self.delete("_shape")
+            draw_round_shape(self, 0.5, 0.5, w - 0.5, h - 0.5, self._radius,
+                             self._bg, self._border, outer=self._outer,
+                             tag="_shape")
+            # 角图是后建的，要压到内容窗口下面，否则会盖住卡片内容
+            self.tag_lower("_shape", self._win)
             self.itemconfigure(self._win, width=max(1, w - 2 * self._pad),
                                height=max(1, h - 2 * self._pad))
         finally:
@@ -201,8 +366,8 @@ class RoundButton(tk.Canvas):
         if h <= 1:
             h = int(self.cget("height")) or 24
         fill, fg, bd, _, _ = self._colors()
-        round_rect(self, 0.5, 0.5, w - 0.5, h - 0.5, self._radius,
-                   fill=fill, outline=bd, width=1)
+        draw_round_shape(self, 0.5, 0.5, w - 0.5, h - 0.5, self._radius,
+                         fill, bd, outer=self._bg)
         cx = w / 2
         if self._caret:
             cx = w / 2 - 7
@@ -339,8 +504,7 @@ class RoundEntry(tk.Canvas):
                          highlightthickness=0, bd=0, takefocus=0)
         # 必须先 super().__init__，否则 self.tk 还不存在，里面建不了子控件
         self.entry = ttk.Entry(self, textvariable=textvariable, **kw)
-        self._rect = round_rect(self, 0, 0, 1, 1, self._radius,
-                                fill=C_CARD, outline=C_BORDER, width=1)
+        self._border = C_BORDER
         self._win = self.create_window(self._pad, 2, window=self.entry, anchor="nw")
         self.bind("<Configure>", self._fit)
         self.entry.bind("<FocusIn>", lambda e: self._set_focus(True))
@@ -348,13 +512,16 @@ class RoundEntry(tk.Canvas):
 
     def _set_focus(self, on):
         self._focus = on
-        self.itemconfigure(self._rect, outline=C_ACCENT if on else C_BORDER)
+        self._border = C_ACCENT if on else C_BORDER
+        self._fit()
 
     def _fit(self, _=None):
         px = lambda v: int(round(v * self._s))
         w, h = max(2, self.winfo_width()), max(2, self.winfo_height())
-        self.coords(self._rect, *round_points(0.5, 0.5, w - 0.5, h - 0.5,
-                                              self._radius))
+        self.delete("_shape")
+        draw_round_shape(self, 0.5, 0.5, w - 0.5, h - 0.5, self._radius,
+                         C_CARD, self._border, outer=self._bg, tag="_shape")
+        self.tag_lower("_shape", self._win)
         self.itemconfigure(self._win, width=max(1, w - 2 * self._pad),
                            height=max(1, h - px(4)))
 
@@ -491,13 +658,18 @@ class RoundSlider(tk.Canvas):
         frac = min(1.0, max(0.0, (self._value() - self._from) / span))
         kx = x0 + frac * (x1 - x0)
         t = self._th / 2
-        round_rect(self, x0, cy - t, x1, cy + t, t, fill="#e3e8f0", outline="")
+        tr = int(max(2, t))
+        draw_round_shape(self, x0, cy - t, x1, cy + t, tr, "#e3e8f0",
+                         None, outer=self._bg)
         if kx > x0 + 0.5:
-            round_rect(self, x0, cy - t, kx, cy + t, t, fill=C_ACCENT, outline="")
+            draw_round_shape(self, x0, cy - t, kx, cy + t, tr, C_ACCENT,
+                             None, outer=self._bg)
         ring = C_DISABLED_FG if self._disabled else C_ACCENT
         r = self._knob / 2
-        self.create_oval(kx - r, cy - r, kx + r, cy + r, fill="#ffffff",
-                         outline=ring, width=max(2, int(round(2 * (self._knob / 18)))))
+        kw = max(2, int(round(2 * (self._knob / 18))))
+        im = circle_image(self, self._knob, "#ffffff", ring, outer=self._bg,
+                          width=kw)
+        self.create_image(kx - r, cy - r, image=im, anchor="nw")
 
     def _pos_to_value(self, x):
         x0, x1, _ = self._geom()
@@ -566,8 +738,25 @@ def _sdf_seg(x, y, x1, y1, x2, y2):
 
 
 def _hex2rgb(c):
-    c = c.lstrip("#")
+    c = str(c).lstrip("#")
     return int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
+
+
+def _rgb(widget, color):
+    """把任意 Tk 颜色描述转成 (r, g, b)。
+
+    注意：`master.cget("bg")` 在没显式设过背景的窗口上返回的是
+    "SystemButtonFace" 这类颜色名，不是 #rrggbb —— 直接按 hex 解析会崩。
+    走 winfo_rgb 才能兼容颜色名。
+    """
+    try:
+        r, g, b = widget.winfo_rgb(color)
+        return r >> 8, g >> 8, b >> 8
+    except Exception:
+        try:
+            return _hex2rgb(color)
+        except Exception:
+            return (255, 255, 255)
 
 
 def _make_icon(master, n, shape, fill, outline, tick=None, bg=C_CARD,
@@ -583,8 +772,8 @@ def _make_icon(master, n, shape, fill, outline, tick=None, bg=C_CARD,
     r = S / 2.0 - 1.0 if shape == "circle" else max(2.0, S * 0.24)
     bw = max(1.0, border * (S / n) * 0.5)
     tw = tick_w * (S / n)
-    bgc, fc, oc = _hex2rgb(bg), _hex2rgb(fill), _hex2rgb(outline)
-    tc = _hex2rgb(tick) if tick else None
+    bgc, fc, oc = _rgb(master, bg), _rgb(master, fill), _rgb(master, outline)
+    tc = _rgb(master, tick) if tick else None
     # 勾的两段线（相对尺寸，和系统勾选图标一致）
     p1 = (0.24 * S, 0.52 * S)
     p2 = (0.44 * S, 0.72 * S)
