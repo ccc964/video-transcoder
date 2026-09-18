@@ -254,6 +254,15 @@ ffprobe -v error -show_format -show_streams 输入.mp4
 
 ## 排错
 
+- **双击 bat 报「系统找不到指定的路径 / 文件」**：还没装运行环境。先双击 `安装环境.bat`，
+  完成后才能用 `启动程序.bat` / `调试启动.bat` / `打包exe.bat`（这三个脚本已加前置检查，会明确提示）。
+- **`启动程序.bat` 双击没反应，或报 `No module named 'tkinter'`**：用来建虚拟环境的 Python
+  不含 tkinter。本程序是图形界面必须有它，而**微软商店版 / 精简版 / 某些软件自带的 Python
+  都不带 tkinter**。`安装环境.bat` 会自动按 `py -3.13 → 3.12 → 3.11 → 3.10 → python`
+  顺序挑选**第一个通过 tkinter 检测**的解释器；若全军覆没会给出明确提示。
+  手工排查：`python -c "import tkinter"`，报错就换成
+  [python.org 官方安装包](https://www.python.org/downloads/)（勾选 Add Python to PATH），
+  然后重跑 `安装环境.bat`（它会自动重建不合格的 .venv）。
 - 换电脑后提示找不到 ffmpeg：确认 `ffmpeg\ffmpeg.exe` 和 exe 在同一文件夹；也可在界面手动指定。
 - 录制没有数据：地址失效或需要特定 Referer 的源暂不支持，换个源试试。
 - 抖音链接解析失败：
