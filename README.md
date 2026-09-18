@@ -16,6 +16,12 @@
 
 👉 [VideoTranscoder.exe](https://github.com/ccc964/video-transcoder/releases/latest/download/VideoTranscoder.exe)（v2.1，11.5 MB）
 
+**国内直连 github.com 通常连接被重置**，下载同一条链接请套加速代理：
+
+```bash
+curl -L -o VideoTranscoder.exe "https://gh-proxy.com/https://github.com/ccc964/video-transcoder/releases/latest/download/VideoTranscoder.exe"
+```
+
 首次运行点界面上的「一键下载 ffmpeg」即可，不需要单独装 Python 或 ffmpeg。
 
 **从源码跑**
