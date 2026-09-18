@@ -22,6 +22,24 @@ MODE_LABELS = [
     ("h265", "H.265 重编码（体积最小，速度稍慢）"),
 ]
 
+# ------------------------------------------------------------------ 配色
+# 浅色扁平风格：窗口底灰、卡片纯白 + 1px 描边，靠留白和层次代替立体感。
+C_BG = "#eff1f5"          # 窗口底色
+C_CARD = "#ffffff"        # 卡片底
+C_CARD_ALT = "#f7f9fc"    # 卡片内嵌区（日志、次级区块）
+C_BORDER = "#dde1e8"      # 描边
+C_TEXT = "#1f2328"        # 主文字
+C_MUTED = "#6b7280"       # 次要文字
+C_ACCENT = "#2f6fed"      # 主色
+C_ACCENT_D = "#2158c9"    # 主色按下
+C_ACCENT_SOFT = "#e8effd" # 主色浅底
+C_OK = "#14804a"
+C_ERR = "#c0392b"
+C_WARN = "#a15c00"
+C_SEL = "#d6e4ff"
+
+FONT = "Microsoft YaHei UI"
+
 
 class App:
     def __init__(self, root: tk.Tk):
@@ -39,6 +57,10 @@ class App:
         self.dl_worker = None
         self.stop_event_dl = threading.Event()
         self.cfg = core.load_config(core.app_dir())
+        # 曾解析过的主播（快捷入口）；构建界面时要用，所以先读出来
+        self.history = [h for h in (self.cfg.get("history") or []) if isinstance(h, dict)]
+        self._probe_input = ""
+        self._probe_pending = None
         self.nvenc_h264 = False
         self.nvenc_h265 = False
         try:
@@ -67,129 +89,419 @@ class App:
         self.root.update_idletasks()
         s = self.scale
         need_w = max(self.root.winfo_reqwidth(), int(1000 * s))
-        need_h = max(self.root.winfo_reqheight(), int(660 * s))
+        need_h = max(self.root.winfo_reqheight(), int(780 * s))
         w = min(need_w + 24, self.root.winfo_screenwidth() - 60)
         h = min(need_h + 24, self.root.winfo_screenheight() - 110)
         self.root.geometry(f"{w}x{h}")
 
-    def _build_ui(self):
+    def _setup_style(self):
+        """统一字体与控件外观（clam 主题 + 手工调色，零额外依赖）。"""
         s = self.scale
-        pad = lambda v: int(v * s)
-        style = ttk.Style(self.root)
+        px = lambda v: int(v * s)
+        st = ttk.Style(self.root)
         try:
-            style.theme_use("clam")
+            st.theme_use("clam")          # clam 最容易改色，vista 主题改不动
         except Exception:
             pass
-        style.configure("TButton", padding=(pad(10), pad(4)))
-        style.configure("TNotebook.Tab", padding=(pad(14), pad(5)))
 
-        top = ttk.Frame(self.root)
-        top.pack(fill="x", padx=pad(10), pady=(pad(8), pad(4)))
-        ttk.Label(top, text="ffmpeg：").pack(side="left")
-        ttk.Entry(top, textvariable=self.var_ffmpeg).pack(
-            side="left", fill="x", expand=True, padx=pad(6))
-        ttk.Button(top, text="浏览…", command=self._pick_ffmpeg).pack(side="left", padx=2)
-        ttk.Button(top, text="自动检测", command=self._detect_ffmpeg_bg).pack(side="left", padx=2)
-        self.btn_ff = ttk.Button(top, text="一键下载 ffmpeg", command=self._install_ffmpeg_bg)
-        self.btn_ff.pack(side="left", padx=2)
-        self.lbl_ff = ttk.Label(top, text="检测中…", foreground="#888888")
-        self.lbl_ff.pack(side="left", padx=pad(8))
+        # ---- 容器 ----
+        st.configure("TFrame", background=C_BG)
+        st.configure("Tab.TFrame", background=C_BG)
+        st.configure("Card.TFrame", background=C_CARD)
+        st.configure("CardAlt.TFrame", background=C_CARD_ALT)
 
+        # ---- 文字 ----
+        st.configure("TLabel", background=C_BG, foreground=C_TEXT, font=(FONT, 9))
+        st.configure("Card.TLabel", background=C_CARD, foreground=C_TEXT,
+                     font=(FONT, 9))
+        st.configure("CardTitle.TLabel", background=C_CARD, foreground=C_TEXT,
+                     font=(FONT, 10, "bold"))
+        st.configure("CardHint.TLabel", background=C_CARD, foreground=C_MUTED,
+                     font=(FONT, 8))
+        st.configure("Hint.TLabel", background=C_BG, foreground=C_MUTED,
+                     font=(FONT, 8))
+        st.configure("Brand.TLabel", background=C_CARD, foreground=C_TEXT,
+                     font=(FONT, 14, "bold"))
+        st.configure("BrandSub.TLabel", background=C_CARD, foreground=C_MUTED,
+                     font=(FONT, 8))
+
+        # ---- 按钮 ----
+        st.configure("TButton", font=(FONT, 9), padding=(px(12), px(5)),
+                     background=C_CARD, foreground=C_TEXT,
+                     bordercolor=C_BORDER, lightcolor=C_CARD, darkcolor=C_CARD,
+                     focuscolor=C_CARD, relief="flat")
+        st.map("TButton",
+               background=[("disabled", C_CARD_ALT), ("pressed", C_ACCENT_SOFT),
+                           ("active", C_ACCENT_SOFT)],
+               foreground=[("disabled", "#a8adb6")],
+               bordercolor=[("active", C_ACCENT)])
+
+        st.configure("Accent.TButton", background=C_ACCENT, foreground="#ffffff",
+                     bordercolor=C_ACCENT, lightcolor=C_ACCENT, darkcolor=C_ACCENT,
+                     focuscolor=C_ACCENT)
+        st.map("Accent.TButton",
+               background=[("disabled", "#b9c6df"), ("pressed", C_ACCENT_D),
+                           ("active", C_ACCENT_D)],
+               foreground=[("disabled", "#f2f5fa")],
+               bordercolor=[("disabled", "#b9c6df")])
+
+        st.configure("Ghost.TButton", background=C_CARD_ALT, foreground=C_TEXT,
+                     bordercolor=C_BORDER, lightcolor=C_CARD_ALT,
+                     darkcolor=C_CARD_ALT, focuscolor=C_CARD_ALT)
+        st.map("Ghost.TButton",
+               background=[("pressed", C_ACCENT_SOFT), ("active", C_ACCENT_SOFT)],
+               foreground=[("disabled", "#a8adb6")])
+
+        # 历史主播快捷按钮：小圆润芯片样式
+        st.configure("Chip.TButton", font=(FONT, 9), padding=(px(10), px(4)),
+                     background=C_ACCENT_SOFT, foreground=C_ACCENT_D,
+                     bordercolor="#c7d8fb", lightcolor=C_ACCENT_SOFT,
+                     darkcolor=C_ACCENT_SOFT, focuscolor=C_ACCENT_SOFT)
+        st.map("Chip.TButton",
+               background=[("pressed", "#cfdffd"), ("active", "#dbe7ff")],
+               foreground=[("disabled", "#a8adb6")])
+
+        st.configure("TMenubutton", font=(FONT, 9), padding=(px(12), px(5)),
+                     background=C_CARD, foreground=C_TEXT,
+                     bordercolor=C_BORDER, lightcolor=C_CARD, darkcolor=C_CARD,
+                     focuscolor=C_CARD, relief="flat", arrowcolor=C_MUTED)
+        st.map("TMenubutton",
+               background=[("disabled", C_CARD_ALT), ("pressed", C_ACCENT_SOFT),
+                           ("active", C_ACCENT_SOFT)],
+               foreground=[("disabled", "#a8adb6")],
+               bordercolor=[("active", C_ACCENT)])
+
+        # ---- 输入 ----
+        st.configure("TEntry", font=(FONT, 9), padding=(px(6), px(4)),
+                     fieldbackground=C_CARD, background=C_CARD,
+                     foreground=C_TEXT, bordercolor=C_BORDER, relief="flat",
+                     insertcolor=C_TEXT)
+        st.map("TEntry", bordercolor=[("focus", C_ACCENT)],
+               lightcolor=[("focus", C_ACCENT)], darkcolor=[("focus", C_ACCENT)])
+
+        st.configure("TCombobox", font=(FONT, 9), padding=(px(6), px(3)),
+                     fieldbackground=C_CARD, background=C_CARD,
+                     foreground=C_TEXT, bordercolor=C_BORDER, relief="flat",
+                     arrowcolor=C_MUTED)
+        st.map("TCombobox",
+               fieldbackground=[("readonly", C_CARD), ("disabled", C_CARD_ALT)],
+               bordercolor=[("focus", C_ACCENT), ("hover", C_ACCENT)])
+        # 下拉列表是原生 Tk listbox，只能走 option 数据库
+        self.root.option_add("*TCombobox*Listbox.background", C_CARD)
+        self.root.option_add("*TCombobox*Listbox.foreground", C_TEXT)
+        self.root.option_add("*TCombobox*Listbox.selectBackground", C_ACCENT)
+        self.root.option_add("*TCombobox*Listbox.selectForeground", "#ffffff")
+        self.root.option_add("*TCombobox*Listbox.font", (FONT, 9))
+        self.root.option_add("*TCombobox*Listbox.borderWidth", 0)
+
+        # ---- 勾选 / 单选 ----
+        st.configure("TCheckbutton", background=C_CARD, foreground=C_TEXT,
+                     font=(FONT, 9), focuscolor=C_CARD, relief="flat")
+        st.map("TCheckbutton", background=[("active", C_CARD)],
+               indicatorcolor=[("selected", C_ACCENT), ("!selected", C_CARD)])
+        st.configure("TRadiobutton", background=C_CARD, foreground=C_TEXT,
+                     font=(FONT, 9), focuscolor=C_CARD)
+        st.map("TRadiobutton", background=[("active", C_CARD)],
+               indicatorcolor=[("selected", C_ACCENT), ("!selected", C_CARD)])
+
+        # ---- 页签 ----
+        st.configure("TNotebook", background=C_BG, bordercolor=C_BORDER,
+                     tabmargins=(px(6), px(6), 0, 0), relief="flat")
+        st.configure("TNotebook.Tab", font=(FONT, 10), padding=(px(20), px(8)),
+                     background=C_BG, foreground=C_MUTED,
+                     bordercolor=C_BG, lightcolor=C_BG, darkcolor=C_BG)
+        st.map("TNotebook.Tab",
+               background=[("selected", C_CARD), ("active", "#e4e8ef")],
+               foreground=[("selected", C_ACCENT), ("active", C_TEXT)],
+               expand=[("selected", (0, 0, 0, 0))])
+
+        # ---- 表格 ----
+        st.configure("Treeview", font=(FONT, 9), rowheight=px(24),
+                     background=C_CARD, fieldbackground=C_CARD,
+                     foreground=C_TEXT, bordercolor=C_BORDER, relief="flat")
+        st.map("Treeview", background=[("selected", C_SEL)],
+               foreground=[("selected", C_TEXT)])
+        st.configure("Treeview.Heading", font=(FONT, 9, "bold"),
+                     background=C_CARD_ALT, foreground=C_MUTED,
+                     bordercolor=C_BORDER, relief="flat", padding=(px(6), px(5)))
+        st.map("Treeview.Heading", background=[("active", "#eaeef5")])
+
+        # ---- 滑块 / 进度 ----
+        st.configure("TScale", background=C_CARD, troughcolor="#e6eaf1",
+                     bordercolor=C_BORDER, lightcolor=C_ACCENT,
+                     darkcolor=C_ACCENT)
+        st.configure("Horizontal.TScale", background=C_CARD,
+                     troughcolor="#e6eaf1", bordercolor=C_BORDER)
+        st.configure("TProgressbar", background=C_ACCENT, troughcolor="#e6eaf1",
+                     bordercolor=C_BORDER, lightcolor=C_ACCENT,
+                     darkcolor=C_ACCENT, thickness=px(12))
+        st.configure("TScrollbar", background=C_CARD_ALT, troughcolor=C_BG,
+                     bordercolor=C_BG, arrowcolor=C_MUTED, relief="flat")
+        st.map("TScrollbar", background=[("active", "#d3d9e3")])
+
+        st.configure("TSpinbox", font=(FONT, 9), padding=(px(4), px(2)),
+                     fieldbackground=C_CARD, background=C_CARD,
+                     foreground=C_TEXT, bordercolor=C_BORDER, arrowcolor=C_MUTED,
+                     relief="flat")
+
+        # ---- 分隔线 ----
+        st.configure("Sep.TFrame", background=C_BORDER)
+
+    # ---------- 布局小工具 ----------
+
+    def _card(self, parent, pad=None):
+        """一张白卡片：白底 + 1px 描边（tk.Frame 才改得动描边颜色）。"""
+        s = self.scale
+        pad = pad if pad is not None else int(9 * s)
+        outer = tk.Frame(parent, bg=C_CARD, highlightbackground=C_BORDER,
+                         highlightthickness=1, bd=0)
+        inner = tk.Frame(outer, bg=C_CARD)
+        inner.pack(fill="both", expand=True, padx=pad, pady=pad)
+        outer.inner = inner
+        return outer
+
+    def _section(self, parent, text, hint=""):
+        """卡片内的小标题行，返回 (行容器, 内容容器)。"""
+        s = self.scale
+        px = lambda v: int(v * s)
+        row = tk.Frame(parent, bg=C_CARD)
+        row.pack(fill="x")
+        ttk.Label(row, text=text, style="CardTitle.TLabel").pack(side="left")
+        if hint:
+            ttk.Label(row, text=hint, style="CardHint.TLabel").pack(
+                side="left", padx=(px(8), 0))
+        return row
+
+    def _hline(self, parent, top=0, bottom=0):
+        s = self.scale
+        px = lambda v: int(v * s)
+        f = tk.Frame(parent, bg=C_BORDER, height=1)
+        f.pack(fill="x", pady=(px(top), px(bottom)))
+        return f
+
+    def _scrollable(self, parent, min_h=300):
+        """把页签内容放进可滚动容器。
+
+        为什么需要：窗口高度受屏幕限制（winfo_screenheight-110）。在
+        1080p@150%、1440p@200% 这类「大字体」设置下，可用高度只有 700 逻辑像素
+        左右，几排设置卡加上日志放不下，末尾的「开始录制」按钮会被裁掉且点不到。
+        这里让内容自己去滚动，窗口再矮也不会丢控件。
+
+        min_h 只是向窗口申报的最小高度，窗口够大时画布会自动撑开显示全部内容。
+        """
+        s = self.scale
+        px = lambda v: int(v * s)
+        wrap = ttk.Frame(parent, style="Tab.TFrame")
+        wrap.pack(fill="both", expand=True)
+
+        canvas = tk.Canvas(wrap, bg=C_BG, highlightthickness=0, bd=0,
+                           height=px(min_h), yscrollincrement=px(20))
+        vs = ttk.Scrollbar(wrap, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=vs.set)
+        vs.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+
+        inner = ttk.Frame(canvas, style="Tab.TFrame")
+        win = canvas.create_window((0, 0), window=inner, anchor="nw")
+        lock = {"busy": False}
+
+        def sync(_=None):
+            if lock["busy"]:
+                return
+            lock["busy"] = True
+            try:
+                # 用 reqheight（内容自然高度）而不是 bbox，避免「设高→bbox 变化→
+                # 再设高」的自激循环
+                natural = inner.winfo_reqheight()
+                cw, ch = canvas.winfo_width(), canvas.winfo_height()
+                want_h = max(natural, ch)
+                if canvas.itemcget(win, "width") != str(cw):
+                    canvas.itemconfigure(win, width=cw)
+                if canvas.itemcget(win, "height") != str(want_h):
+                    canvas.itemconfigure(win, height=want_h)
+                canvas.configure(scrollregion=(0, 0, cw, want_h))
+            finally:
+                lock["busy"] = False
+
+        inner.bind("<Configure>", sync)
+        canvas.bind("<Configure>", sync)
+
+        def wheel(e):
+            # 只在真正超出时才滚，避免吃掉本该给子控件（如文件列表）的滚轮
+            if inner.winfo_reqheight() > canvas.winfo_height():
+                canvas.yview_scroll(-1 if e.delta > 0 else 1, "units")
+
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", wheel))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+        return inner
+
+    def _build_ui(self):
+        s = self.scale
+        px = lambda v: int(v * s)
+        self.root.configure(bg=C_BG)
+        self._setup_style()
+
+        # ==================== 顶部：标题 + ffmpeg ====================
+        head = self._card(self.root)
+        head.pack(fill="x", padx=px(12), pady=(px(12), px(8)))
+        h = head.inner
+
+        titlerow = tk.Frame(h, bg=C_CARD)
+        titlerow.pack(fill="x")
+        ttk.Label(titlerow, text="视频转码", style="Brand.TLabel").pack(side="left")
+        ttk.Label(titlerow, text="ffmpeg 批量转码 / 直播录制",
+                  style="BrandSub.TLabel").pack(side="left", padx=(px(10), 0),
+                                               pady=(px(4), 0))
+
+        self._hline(h, top=8, bottom=8)
+
+        ffrow = tk.Frame(h, bg=C_CARD)
+        ffrow.pack(fill="x")
+        ttk.Label(ffrow, text="ffmpeg", style="Card.TLabel").pack(side="left")
+        ttk.Entry(ffrow, textvariable=self.var_ffmpeg).pack(
+            side="left", fill="x", expand=True, padx=(px(8), px(8)))
+        ttk.Button(ffrow, text="浏览…", style="Ghost.TButton",
+                   command=self._pick_ffmpeg).pack(side="left", padx=px(2))
+        ttk.Button(ffrow, text="自动检测", style="Ghost.TButton",
+                   command=self._detect_ffmpeg_bg).pack(side="left", padx=px(2))
+        self.btn_ff = ttk.Button(ffrow, text="一键下载 ffmpeg", style="Accent.TButton",
+                                 command=self._install_ffmpeg_bg)
+        self.btn_ff.pack(side="left", padx=px(2))
+        self.lbl_ff = ttk.Label(ffrow, text="检测中…", style="CardHint.TLabel")
+        self.lbl_ff.pack(side="left", padx=(px(10), 0))
+
+        # ==================== 页签 ====================
+        # 注意：这里只创建、不 pack —— pack 顺序决定「窗口不够高时谁先让位」，
+        # 要先 pack 底部的日志卡，再让页签去占剩余空间（见下方）。
         self.nb = ttk.Notebook(self.root)
-        self.nb.pack(fill="both", expand=True, padx=pad(10), pady=pad(4))
-        tab1 = ttk.Frame(self.nb)
-        self.nb.add(tab1, text="视频转码")
-        tab2 = ttk.Frame(self.nb)
-        self.nb.add(tab2, text="直播录制")
+        tab1 = ttk.Frame(self.nb, style="Tab.TFrame")
+        self.nb.add(tab1, text="  视频转码  ")
+        tab2 = ttk.Frame(self.nb, style="Tab.TFrame")
+        self.nb.add(tab2, text="  直播录制  ")
 
-        mid = tab1
+        # ---------------- 页签 1：转码 ----------------
+        mid = self._scrollable(tab1)
         mid.columnconfigure(0, weight=3)
         mid.columnconfigure(1, weight=2)
         mid.rowconfigure(0, weight=1)
 
-        # 左：文件列表
-        left = ttk.LabelFrame(mid, text="文件列表（支持把视频直接拖进来）")
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, pad(6)))
-        left.rowconfigure(0, weight=1)
-        left.columnconfigure(0, weight=1)
-        self.tree = ttk.Treeview(left, columns=("file", "size"), show="headings", height=9)
+        left = self._card(mid)
+        left.grid(row=0, column=0, sticky="nsew", padx=(px(10), px(6)), pady=px(10))
+        lf = left.inner
+        self._section(lf, "文件列表", "支持把视频直接拖进窗口")
+        treewrap = tk.Frame(lf, bg=C_CARD)
+        treewrap.pack(fill="both", expand=True, pady=(px(8), 0))
+        treewrap.rowconfigure(0, weight=1)
+        treewrap.columnconfigure(0, weight=1)
+        self.tree = ttk.Treeview(treewrap, columns=("file", "size"),
+                                 show="headings", height=9)
         self.tree.heading("file", text="文件")
         self.tree.heading("size", text="大小")
-        self.tree.column("file", width=pad(380))
-        self.tree.column("size", width=pad(80), anchor="e")
-        self.tree.grid(row=0, column=0, sticky="nsew", padx=pad(6), pady=pad(6))
-        ys = ttk.Scrollbar(left, orient="vertical", command=self.tree.yview)
+        self.tree.column("file", width=px(380))
+        self.tree.column("size", width=px(80), anchor="e")
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        ys = ttk.Scrollbar(treewrap, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=ys.set)
-        ys.grid(row=0, column=1, sticky="ns", pady=pad(6))
-        btns = ttk.Frame(left)
-        btns.grid(row=1, column=0, columnspan=2, sticky="ew", padx=pad(6), pady=(0, pad(6)))
-        ttk.Button(btns, text="添加文件", command=self._add_files).pack(side="left", padx=2)
-        ttk.Button(btns, text="添加文件夹", command=self._add_folder).pack(side="left", padx=2)
-        ttk.Button(btns, text="移除选中", command=self._remove_sel).pack(side="left", padx=2)
-        ttk.Button(btns, text="清空", command=self._clear_all).pack(side="left", padx=2)
+        ys.grid(row=0, column=1, sticky="ns", padx=(px(4), 0))
 
-        # 右：设置
-        right = ttk.LabelFrame(mid, text="转码设置")
-        right.grid(row=0, column=1, sticky="nsew")
-        r = right
-        ttk.Label(r, text="转码模式：").grid(row=0, column=0, sticky="w",
-                                            padx=pad(8), pady=(pad(8), 0))
+        btns = tk.Frame(lf, bg=C_CARD)
+        btns.pack(fill="x", pady=(px(10), 0))
+        ttk.Button(btns, text="添加文件", command=self._add_files).pack(side="left")
+        ttk.Button(btns, text="添加文件夹", command=self._add_folder).pack(
+            side="left", padx=px(6))
+        ttk.Button(btns, text="移除选中", style="Ghost.TButton",
+                   command=self._remove_sel).pack(side="left")
+        ttk.Button(btns, text="清空", style="Ghost.TButton",
+                   command=self._clear_all).pack(side="left", padx=px(6))
+
+        right = self._card(mid)
+        right.grid(row=0, column=1, sticky="nsew", padx=(px(6), px(10)), pady=px(10))
+        rf = right.inner
+
+        self._section(rf, "转码模式")
         self.mode_btns = []
-        for i, (val, txt) in enumerate(MODE_LABELS):
-            rb = ttk.Radiobutton(r, text=txt, value=val, variable=self.var_mode,
+        for val, txt in MODE_LABELS:
+            rb = ttk.Radiobutton(rf, text=txt, value=val, variable=self.var_mode,
                                  command=self._mode_changed)
-            rb.grid(row=1 + i, column=0, columnspan=2, sticky="w",
-                    padx=pad(10), pady=pad(2))
+            rb.pack(anchor="w", pady=(px(6), 0))
             self.mode_btns.append(rb)
 
-        ttk.Label(r, text="质量（CQ/CRF，越小越清晰）：").grid(
-            row=4, column=0, sticky="w", padx=pad(8), pady=(pad(10), 0))
-        row_q = ttk.Frame(r)
-        row_q.grid(row=5, column=0, columnspan=2, sticky="ew", padx=pad(10))
-        self.scl_cq = ttk.Scale(row_q, from_=16, to=32, variable=self.var_cq,
+        self._hline(rf, top=12, bottom=0)
+
+        self._section(rf, "质量", "CQ/CRF，越小越清晰")
+        qrow = tk.Frame(rf, bg=C_CARD)
+        qrow.pack(fill="x", pady=(px(8), 0))
+        self.scl_cq = ttk.Scale(qrow, from_=16, to=32, variable=self.var_cq,
                                 command=self._cq_changed)
         self.scl_cq.pack(side="left", fill="x", expand=True)
-        self.lbl_cq = ttk.Label(row_q, text="23", width=4)
-        self.lbl_cq.pack(side="left", padx=pad(6))
+        self.lbl_cq = ttk.Label(qrow, text="23", style="Card.TLabel", width=4,
+                                anchor="e")
+        self.lbl_cq.pack(side="left", padx=(px(8), 0))
 
-        ttk.Label(r, text="输出格式：").grid(row=6, column=0, sticky="w",
-                                            padx=pad(8), pady=(pad(10), 0))
-        self.cmb_fmt = ttk.Combobox(r, textvariable=self.var_format,
+        self._hline(rf, top=12, bottom=0)
+
+        self._section(rf, "输出")
+        fmtrow = tk.Frame(rf, bg=C_CARD)
+        fmtrow.pack(fill="x", pady=(px(8), 0))
+        ttk.Label(fmtrow, text="格式", style="Card.TLabel").pack(side="left")
+        self.cmb_fmt = ttk.Combobox(fmtrow, textvariable=self.var_format,
                                     values=["mp4", "mkv", "mov"], state="readonly",
                                     width=8)
-        self.cmb_fmt.grid(row=7, column=0, sticky="w", padx=pad(10))
+        self.cmb_fmt.pack(side="left", padx=(px(8), 0))
 
-        ttk.Label(r, text="输出目录（留空=与源文件同目录）：").grid(
-            row=8, column=0, columnspan=2, sticky="w", padx=pad(8), pady=(pad(10), 0))
-        row_o = ttk.Frame(r)
-        row_o.grid(row=9, column=0, columnspan=2, sticky="ew", padx=pad(10))
-        ttk.Entry(row_o, textvariable=self.var_outdir).pack(
-            side="left", fill="x", expand=True)
-        ttk.Button(row_o, text="…", width=3, command=self._pick_outdir).pack(side="left")
+        drows = tk.Frame(rf, bg=C_CARD)
+        drows.pack(fill="x", pady=(px(8), 0))
+        ttk.Label(drows, text="目录", style="Card.TLabel").pack(side="left")
+        ttk.Entry(drows, textvariable=self.var_outdir).pack(
+            side="left", fill="x", expand=True, padx=(px(8), px(4)))
+        ttk.Button(drows, text="…", width=3, style="Ghost.TButton",
+                   command=self._pick_outdir).pack(side="left")
+        ttk.Label(rf, text="留空 = 与源文件同目录", style="CardHint.TLabel").pack(
+            anchor="w", pady=(px(4), 0))
 
-        ttk.Checkbutton(r, text="覆盖已存在的输出文件（否则自动改名 _1/_2）",
-                        variable=self.var_overwrite).grid(
-            row=10, column=0, columnspan=2, sticky="w", padx=pad(10), pady=pad(8))
+        ttk.Checkbutton(rf, text="覆盖已存在的输出文件（否则自动改名 _1/_2）",
+                        variable=self.var_overwrite).pack(anchor="w", pady=(px(12), 0))
 
+        # ---------------- 页签 2：直播录制 ----------------
         self._build_record_tab(tab2)
 
-        # 底：状态 + 日志（转码/录制共用）
-        bottom = ttk.LabelFrame(self.root, text="执行日志")
-        bottom.pack(fill="x", padx=pad(10), pady=(pad(4), pad(10)))
-        row_b = ttk.Frame(bottom)
-        row_b.pack(fill="x", padx=pad(8), pady=pad(6))
-        self.btn_start = ttk.Button(row_b, text="开始转换", command=self._start)
+        # ==================== 底部：日志 ====================
+        # 先 pack 底部，保证窗口再矮也不会把日志挤没（由中间的页签先让位）
+        bottom = self._card(self.root)
+        bottom.pack(side="bottom", fill="x", padx=px(12), pady=(px(6), px(10)))
+        bf = bottom.inner
+        row_b = tk.Frame(bf, bg=C_CARD)
+        row_b.pack(fill="x")
+        self.btn_start = ttk.Button(row_b, text="开始转换", style="Accent.TButton",
+                                    command=self._start)
         self.btn_start.pack(side="left")
-        self.btn_stop = ttk.Button(row_b, text="停止", command=self._stop, state="disabled")
-        self.btn_stop.pack(side="left", padx=pad(6))
-        self.lbl_state = ttk.Label(row_b, text="就绪")
-        self.lbl_state.pack(side="left", padx=pad(12))
-        self.pbar = ttk.Progressbar(row_b, maximum=100, length=pad(260))
+        self.btn_stop = ttk.Button(row_b, text="停止", style="Ghost.TButton",
+                                   command=self._stop, state="disabled")
+        self.btn_stop.pack(side="left", padx=px(8))
+        self.lbl_state = ttk.Label(row_b, text="就绪", style="Card.TLabel")
+        self.lbl_state.pack(side="left", padx=px(14))
+        self.pbar = ttk.Progressbar(row_b, maximum=100, length=px(240))
         self.pbar.pack(side="right")
 
-        self.txt = tk.Text(bottom, height=9, state="disabled", wrap="none",
-                           font=("Microsoft YaHei UI", 9))
-        self.txt.pack(fill="x", padx=pad(8), pady=(0, pad(8)))
+        logwrap = tk.Frame(bf, bg=C_BORDER, highlightthickness=0)
+        logwrap.pack(fill="x", pady=(px(8), 0))
+        self.txt = tk.Text(logwrap, height=6, state="disabled", wrap="none",
+                           font=(FONT, 9), bg=C_CARD_ALT, fg=C_TEXT,
+                           relief="flat", bd=0, padx=px(8), pady=px(6),
+                           insertbackground=C_TEXT, selectbackground=C_SEL,
+                           highlightthickness=1, highlightbackground=C_BORDER,
+                           highlightcolor=C_BORDER)
+        self.txt.pack(fill="x")
+        # 日志按内容着色
+        self.txt.tag_configure("ok", foreground=C_OK)
+        self.txt.tag_configure("err", foreground=C_ERR)
+        self.txt.tag_configure("warn", foreground=C_WARN)
+        self.txt.tag_configure("muted", foreground=C_MUTED)
+        self.txt.tag_configure("accent", foreground=C_ACCENT)
+
+        # 页签最后 pack：窗口不够高时优先压缩页签，日志始终可见
+        self.nb.pack(fill="both", expand=True, padx=px(12), pady=0)
+
 
     def _enable_dnd(self):
         try:
@@ -256,30 +568,38 @@ class App:
 
     # ---------- 直播录制 ----------
 
-    def _build_record_tab(self, r):
+    def _menu(self, parent):
+        """统一样式的下拉菜单。"""
+        return tk.Menu(parent, tearoff=0, font=(FONT, 9), bg=C_CARD, fg=C_TEXT,
+                       activebackground=C_ACCENT, activeforeground="#ffffff",
+                       bd=0, relief="flat", activeborderwidth=0)
+
+    def _build_record_tab(self, parent):
         s = self.scale
-        padx = lambda v: int(v * s)
-        r.columnconfigure(0, weight=1)
-        r.columnconfigure(1, weight=0)
+        px = lambda v: int(v * s)
+        r = self._scrollable(parent)
 
-        ttk.Label(r, text="直播源地址：抖音直播间链接 / 房间号 / 分享短链 / 主页链接，"
-                          "或 m3u8 / flv / mp4 直链 / rtmp：").grid(
-            row=0, column=0, columnspan=2, sticky="w",
-            padx=padx(10), pady=(padx(14), 0))
+        # ============ 卡片 1：直播源 ============
+        c1 = self._card(r)
+        c1.pack(fill="x", padx=px(10), pady=(px(10), px(8)))
+        f1 = c1.inner
+        self._section(f1, "直播源", "抖音直播间链接 / 房间号 / 分享短链 / 主页链接，"
+                                    "或 m3u8 / flv / mp4 直链 / rtmp")
+
         self.var_url = tk.StringVar()
-        ttk.Entry(r, textvariable=self.var_url).grid(
-            row=1, column=0, columnspan=2, sticky="ew", padx=padx(10), pady=padx(4))
+        urow = tk.Frame(f1, bg=C_CARD)
+        urow.pack(fill="x", pady=(px(8), 0))
+        ttk.Entry(urow, textvariable=self.var_url).pack(fill="x")
 
-        # ---- 抖音解析行 ----
-        row_p = ttk.Frame(r)
-        row_p.grid(row=2, column=0, columnspan=2, sticky="w",
-                   padx=padx(10), pady=(padx(2), 0))
-        self.btn_probe = ttk.Button(row_p, text="解析画质", command=self._probe_rec_source)
+        row_p = tk.Frame(f1, bg=C_CARD)
+        row_p.pack(fill="x", pady=(px(8), 0))
+        self.btn_probe = ttk.Button(row_p, text="解析画质", style="Accent.TButton",
+                                    command=self._probe_rec_source)
         self.btn_probe.pack(side="left")
 
         # ---- 一键复制推流地址（转播用）----
         self.btn_copy = ttk.Menubutton(row_p, text="复制推流地址")
-        menu = tk.Menu(self.btn_copy, tearoff=0)
+        menu = self._menu(self.btn_copy)
         menu.add_command(label="复制 FLV 地址（当前画质）",
                          command=lambda: self._copy_stream("flv"))
         menu.add_command(label="复制 HLS(m3u8) 地址（当前画质）",
@@ -292,84 +612,204 @@ class App:
         menu.add_command(label="复制全部画质（HLS）",
                          command=lambda: self._copy_stream("hls", all_qualities=True))
         self.btn_copy["menu"] = menu
-        self.btn_copy.pack(side="left", padx=padx(6))
+        self.btn_copy.pack(side="left", padx=px(6))
         self.btn_copy.state(["disabled"])
-        self.var_url.trace_add("write", lambda *_: self._invalidate_probe())
 
-        ttk.Label(row_p, text="录制画质：").pack(side="left", padx=(padx(12), 0))
+        tk.Frame(row_p, bg=C_BORDER, width=1, height=px(22)).pack(
+            side="left", padx=px(10))
+        ttk.Label(row_p, text="画质", style="Card.TLabel").pack(side="left")
         self.var_quality = tk.StringVar(value=core.AUTO_QUALITY)
         self.cmb_quality = ttk.Combobox(row_p, textvariable=self.var_quality,
                                         values=list(core.RECORD_QUALITIES),
-                                        state="readonly", width=16)
-        self.cmb_quality.pack(side="left", padx=padx(4))
-        self.lbl_probe = ttk.Label(row_p, text="", foreground="#888888")
-        self.lbl_probe.pack(side="left", padx=padx(10))
+                                        state="readonly", width=14)
+        self.cmb_quality.pack(side="left", padx=(px(6), 0))
+        self.lbl_probe = ttk.Label(row_p, text="", style="CardHint.TLabel")
+        self.lbl_probe.pack(side="left", padx=px(12))
 
-        ttk.Label(r, text="（填抖音地址时点一下「解析画质」可看到主播与画质档位；"
-                          "直链地址无需解析，直接录制。解析后「复制推流地址」"
-                          "可一键拷走地址用于转播）",
-                  foreground="#888888").grid(
-            row=3, column=0, columnspan=2, sticky="w", padx=padx(10), pady=(padx(2), 0))
+        self.var_url.trace_add("write", lambda *_: self._invalidate_probe())
 
-        ttk.Label(r, text="保存位置（留空=按主播名+时间自动命名）：").grid(
-            row=4, column=0, columnspan=2, sticky="w", padx=padx(10), pady=(padx(8), 0))
-        row_d = ttk.Frame(r)
-        row_d.grid(row=5, column=0, columnspan=2, sticky="ew", padx=padx(10))
-        row_d.columnconfigure(0, weight=1)
+        # ============ 卡片 2：常看主播（解析历史快捷入口）============
+        c2 = self._card(r)
+        c2.pack(fill="x", padx=px(10), pady=(0, px(8)))
+        f2 = c2.inner
+        hrow = tk.Frame(f2, bg=C_CARD)
+        hrow.pack(fill="x")
+        ttk.Label(hrow, text="常看主播", style="CardTitle.TLabel").pack(side="left")
+        ttk.Label(hrow, text="点一下自动填入并重新解析（推流地址有时效，必须重新解析）",
+                  style="CardHint.TLabel").pack(side="left", padx=(px(8), 0))
+        self.btn_hist_more = ttk.Menubutton(hrow, text="全部记录")
+        hm = self._menu(self.btn_hist_more)
+        self.btn_hist_more["menu"] = hm
+        self.btn_hist_more.pack(side="right")
+
+        self.hist_frame = tk.Frame(f2, bg=C_CARD)
+        self.hist_frame.pack(fill="x", pady=(px(8), 0))
+        self.hist_cols = 4
+        self._refresh_history_ui()
+
+        # ============ 卡片 3：保存与选项 ============
+        c3 = self._card(r)
+        c3.pack(fill="x", padx=px(10), pady=(0, px(8)))
+        f3 = c3.inner
+        self._section(f3, "录制设置")
+
+        drow = tk.Frame(f3, bg=C_CARD)
+        drow.pack(fill="x", pady=(px(8), 0))
+        ttk.Label(drow, text="保存到", style="Card.TLabel").pack(side="left")
         self.var_rec_dst = tk.StringVar()
-        ttk.Entry(row_d, textvariable=self.var_rec_dst).grid(
-            row=0, column=0, sticky="ew")
-        ttk.Button(row_d, text="…", width=3, command=self._pick_rec_dst).grid(row=0, column=1)
+        ttk.Entry(drow, textvariable=self.var_rec_dst).pack(
+            side="left", fill="x", expand=True, padx=(px(8), px(4)))
+        ttk.Button(drow, text="…", width=3, style="Ghost.TButton",
+                   command=self._pick_rec_dst).pack(side="left")
 
-        row_o = ttk.Frame(r)
-        row_o.grid(row=6, column=0, columnspan=2, sticky="w", padx=padx(10), pady=(padx(10), 0))
-        ttk.Label(row_o, text="最长录制（分钟，0=不限）：").pack(side="left")
+        # 提示和「最长录制」并成一行，省纵向空间
+        orow = tk.Frame(f3, bg=C_CARD)
+        orow.pack(fill="x", pady=(px(6), 0))
+        ttk.Label(orow, text="留空 = 按「主播名_日期_时间.mp4」自动命名",
+                  style="CardHint.TLabel").pack(side="left")
+        # 注意 side="right" 是「后 pack 的靠左」，所以右起第一个要先 pack
+        ttk.Label(orow, text="分钟（0 = 不限）", style="CardHint.TLabel").pack(
+            side="right")
         self.var_rec_limit = tk.IntVar(value=0)
-        ttk.Spinbox(row_o, from_=0, to=1440, textvariable=self.var_rec_limit,
-                    width=6).pack(side="left", padx=padx(6))
+        ttk.Spinbox(orow, from_=0, to=1440, textvariable=self.var_rec_limit,
+                    width=5).pack(side="right", padx=(0, px(6)))
+        ttk.Label(orow, text="最长录制", style="Card.TLabel").pack(
+            side="right", padx=(0, px(6)))
+
+        # 选项排成两列，省纵向空间
+        opt = tk.Frame(f3, bg=C_CARD)
+        opt.pack(fill="x", pady=(px(10), 0))
         self.var_rec_reconnect = tk.BooleanVar(value=True)
-        ttk.Checkbutton(row_o, text="HTTP 直链断流自动重连",
-                        variable=self.var_rec_reconnect).pack(side="left", padx=padx(10))
+        ttk.Checkbutton(opt, text="HTTP 直链断流自动重连",
+                        variable=self.var_rec_reconnect).grid(row=0, column=0, sticky="w")
         self.var_rec_wait = tk.BooleanVar(value=False)
-        ttk.Checkbutton(row_o, text="未开播时自动等待开录（每 30 秒重试）",
-                        variable=self.var_rec_wait).pack(side="left", padx=padx(10))
-
-        row_c1 = ttk.Frame(r)
-        row_c1.grid(row=7, column=0, columnspan=2, sticky="w", padx=padx(10), pady=(padx(6), 0))
+        ttk.Checkbutton(opt, text="未开播时自动等待开录（每 30 秒重试）",
+                        variable=self.var_rec_wait).grid(row=0, column=1, sticky="w",
+                                                         padx=(px(18), 0))
         self.var_rec_mp4 = tk.BooleanVar(value=True)
-        ttk.Checkbutton(row_c1, text="停止后自动无损转成 mp4（录制中间件为 ts，不会坏）",
-                        variable=self.var_rec_mp4).pack(side="left")
+        ttk.Checkbutton(opt, text="停止后自动无损转成 mp4",
+                        variable=self.var_rec_mp4).grid(row=1, column=0, sticky="w",
+                                                        pady=(px(6), 0))
         self.var_rec_keep = tk.BooleanVar(value=False)
-        ttk.Checkbutton(row_c1, text="保留 ts 中间文件",
-                        variable=self.var_rec_keep).pack(side="left", padx=padx(12))
+        ttk.Checkbutton(opt, text="保留 ts 中间文件",
+                        variable=self.var_rec_keep).grid(row=1, column=1, sticky="w",
+                                                         padx=(px(18), 0),
+                                                         pady=(px(6), 0))
 
-        row_c2 = ttk.Frame(r)
-        row_c2.grid(row=8, column=0, columnspan=2, sticky="w", padx=padx(10), pady=(padx(4), 0))
+        trow = tk.Frame(f3, bg=C_CARD)
+        trow.pack(fill="x", pady=(px(6), 0))
         self.var_rec_transcode = tk.BooleanVar(value=False)
-        ttk.Checkbutton(row_c2, text="录完自动重编码：",
+        ttk.Checkbutton(trow, text="录完自动重编码",
                         variable=self.var_rec_transcode).pack(side="left")
         self.var_rec_tmode = tk.StringVar(value=core.TRANSCODE_MODES[0][1])
-        ttk.Combobox(row_c2, textvariable=self.var_rec_tmode, state="readonly", width=22,
-                     values=[txt for _, txt in core.TRANSCODE_MODES]).pack(side="left",
-                                                                          padx=padx(4))
-        ttk.Label(row_c2, text="（质量档沿用「视频转码」页的 CQ 设置）",
-                  foreground="#888888").pack(side="left", padx=padx(6))
+        ttk.Combobox(trow, textvariable=self.var_rec_tmode, state="readonly",
+                     width=22, values=[txt for _, txt in core.TRANSCODE_MODES]).pack(
+            side="left", padx=(px(6), px(8)))
+        ttk.Label(trow, text="质量档沿用「视频转码」页的 CQ",
+                  style="CardHint.TLabel").pack(side="left")
 
-        row_r = ttk.Frame(r)
-        row_r.grid(row=9, column=0, columnspan=2, sticky="w", padx=padx(10), pady=padx(14))
-        self.btn_rec_start = ttk.Button(row_r, text="开始录制", command=self._start_rec)
+        # ============ 操作条 ============
+        c4 = self._card(r)
+        c4.pack(fill="x", padx=px(10), pady=(0, px(10)))
+        f4 = c4.inner
+        row_r = tk.Frame(f4, bg=C_CARD)
+        row_r.pack(fill="x")
+        self.btn_rec_start = ttk.Button(row_r, text="开始录制", style="Accent.TButton",
+                                        command=self._start_rec)
         self.btn_rec_start.pack(side="left")
-        self.btn_rec_stop = ttk.Button(row_r, text="停止录制", command=self._stop_rec,
-                                       state="disabled")
-        self.btn_rec_stop.pack(side="left", padx=padx(8))
-        self.lbl_rec = ttk.Label(row_r, text="待命")
-        self.lbl_rec.pack(side="left", padx=padx(12))
-        self.pbar_rec = ttk.Progressbar(row_r, mode="indeterminate", length=int(180 * s))
-        self.pbar_rec.pack(side="left")
+        self.btn_rec_stop = ttk.Button(row_r, text="停止录制", style="Ghost.TButton",
+                                       command=self._stop_rec, state="disabled")
+        self.btn_rec_stop.pack(side="left", padx=px(8))
+        self.lbl_rec = ttk.Label(row_r, text="待命", style="Card.TLabel")
+        self.lbl_rec.pack(side="left", padx=px(14))
+        self.pbar_rec = ttk.Progressbar(row_r, mode="determinate", value=0,
+                                        maximum=100, length=px(200))
+        self.pbar_rec.pack(side="right")
 
-        ttk.Label(r, text="提示：录制全程不重编码（-c copy），CPU 占用极低；"
-                          "抖音地址会先自动解析出推流地址再录制。").grid(
-            row=10, column=0, columnspan=2, sticky="w", padx=padx(10), pady=(padx(6), padx(10)))
+    # ---------- 常看主播（解析历史）----------
+
+    def _refresh_history_ui(self):
+        """重画历史主播快捷按钮和「全部记录」菜单。"""
+        if getattr(self, "hist_frame", None) is None:
+            return
+        s = self.scale
+        px = lambda v: int(v * s)
+        for w in self.hist_frame.winfo_children():
+            w.destroy()
+
+        hist = [h for h in (self.history or []) if isinstance(h, dict)]
+        if not hist:
+            ttk.Label(self.hist_frame,
+                      text="还没有记录。解析成功一次之后，这里会出现主播快捷按钮。",
+                      style="CardHint.TLabel").grid(row=0, column=0, sticky="w")
+            self.btn_hist_more.state(["disabled"])
+            return
+
+        self.btn_hist_more.state(["!disabled"])
+        cols = max(3, self.hist_cols)
+        # 只摆最近 4 个（一行），其余的走「全部记录」菜单 —— 多一行会挤掉
+        # 下方的「开始录制」按钮，得不偿失
+        for i, item in enumerate(hist[:cols]):
+            nick = (item.get("nick") or "").strip() or (item.get("rid") or "未知主播")
+            label = nick if len(nick) <= 7 else nick[:7] + "…"
+            b = ttk.Button(self.hist_frame, text=label, style="Chip.TButton",
+                           command=lambda i=i: self._use_history(i))
+            b.grid(row=i // cols, column=i % cols, sticky="w",
+                   padx=(0, px(6)), pady=(0, px(6)))
+
+        m = self.btn_hist_more.nametowidget(self.btn_hist_more["menu"])
+        m.delete(0, "end")
+        for i, item in enumerate(hist[:15]):
+            nick = (item.get("nick") or "").strip() or "未知主播"
+            rid = item.get("rid") or item.get("input") or ""
+            m.add_command(label=f"{nick}   {rid}",
+                          command=lambda i=i: self._use_history(i))
+        m.add_separator()
+        m.add_command(label="清空全部记录", command=self._clear_history)
+
+    def _remember_streamer(self, room, raw_input):
+        """解析成功后把主播记进历史（按 web_rid 去重，最近的在最前）。"""
+        if not isinstance(room, dict):
+            return
+        nick = (room.get("nickname") or "").strip()
+        rid = str(room.get("web_rid") or "").strip()
+        raw = (raw_input or "").strip()
+        if not nick and not rid:
+            return
+        key = rid or raw
+        self.history = [h for h in (self.history or [])
+                        if isinstance(h, dict)
+                        and (h.get("rid") or h.get("input")) != key]
+        self.history.insert(0, {"nick": nick, "rid": rid, "input": raw,
+                                "ts": int(time.time())})
+        del self.history[12:]
+        self._refresh_history_ui()
+        self._save_cfg()
+
+    def _use_history(self, idx):
+        """点主播快捷按钮：填入地址并立刻重新解析。"""
+        hist = self.history or []
+        if not (0 <= idx < len(hist)):
+            return
+        item = hist[idx]
+        rid = (item.get("rid") or "").strip()
+        # 优先用 web_rid 组链接：比 App 分享短链稳定，也不需要浏览器渲染
+        target = f"https://live.douyin.com/{rid}" if rid else (item.get("input") or "")
+        if not target:
+            return
+        self.nb.select(1)
+        self.var_url.set(target)          # trace 会清掉上一次的解析结果
+        self.lbl_probe.config(text="", foreground=C_MUTED)
+        self._qlog(f"==== 快捷解析：{item.get('nick') or target}")
+        self._probe_rec_source()
+
+    def _clear_history(self):
+        if not self.history:
+            return
+        if messagebox.askyesno("确认", "清空「常看主播」的全部记录？"):
+            self.history = []
+            self._refresh_history_ui()
+            self._save_cfg()
 
     def _pick_rec_dst(self):
         p = filedialog.asksaveasfilename(title="选择录制保存位置",
@@ -388,15 +828,21 @@ class App:
             return
         if not core.is_douyin_input(url):
             self._probe_room = None
-            self.lbl_probe.config(text="非抖音地址，直接录制", foreground="#1a7a3c")
+            self.lbl_probe.config(text="非抖音地址，直接录制", foreground=C_OK)
             self.btn_copy.state(["!disabled"])      # 直链可直接复制
             return
         if self.probe_worker and self.probe_worker.is_alive():
+            # 已有一轮在跑：排队等它结束再自动重解析，否则用户点「常看主播」
+            # 切到另一个主播时会毫无反应（旧结果还会把新地址盖掉）
+            self._probe_pending = url
+            self.lbl_probe.config(text="解析中…（已排队）", foreground=C_MUTED)
             return
         self._probe_room = None
+        self._probe_input = url
+        self._probe_pending = None
         self.btn_copy.state(["disabled"])
         self.btn_probe.config(state="disabled")
-        self.lbl_probe.config(text="解析中…", foreground="#888888")
+        self.lbl_probe.config(text="解析中…", foreground=C_MUTED)
         self.probe_worker = threading.Thread(target=self._work_probe, args=(url,), daemon=True)
         self.probe_worker.start()
 
@@ -423,12 +869,14 @@ class App:
         nick = room.get("nickname") or "未知主播"
         if room.get("is_live"):
             text = f"✓ {nick} · 直播中 · {len(avail)} 档画质"
-            self.lbl_probe.config(text=text, foreground="#1a7a3c")
+            self.lbl_probe.config(text=text, foreground=C_OK)
         else:
             text = f"✗ {nick} · 未开播"
             if avail:
                 text += f" · 已缓存 {len(avail)} 档地址"
-            self.lbl_probe.config(text=text, foreground="#c0392b")
+            self.lbl_probe.config(text=text, foreground=C_ERR)
+        # 解析成功就记进「常看主播」
+        self._remember_streamer(room, self._probe_input)
 
     # ---------- 一键复制推流地址（转播用）----------
 
@@ -553,10 +1001,14 @@ class App:
         self.btn_rec_stop.config(state="normal" if running else "disabled")
         self.btn_probe.config(state="disabled" if running else "normal")
         if running:
+            # 只在录制时切到不确定态；空闲时用确定态 value=0，否则 clam 会一直
+            # 显示一截蓝色滑块，看着像「录到一半」
+            self.pbar_rec.config(mode="indeterminate")
             self.pbar_rec.start(12)
             self.lbl_rec.config(text="录制中…")
         else:
             self.pbar_rec.stop()
+            self.pbar_rec.config(mode="determinate", value=0)
 
     def _tick_rec(self):
         if self.rec_worker and self.rec_worker.is_alive():
@@ -800,6 +1252,8 @@ class App:
             "rec_transcode": bool(self.var_rec_transcode.get()),
             "rec_tmode": self.var_rec_tmode.get(),
             "rec_limit": int(self.var_rec_limit.get() or 0),
+            # 曾解析过的主播
+            "history": self.history or [],
         })
 
     # ---------- 运行 ----------
@@ -918,7 +1372,12 @@ class App:
                         self._probe_room = None
                         self.btn_copy.state(["disabled"])
                         self.lbl_probe.config(text=f"解析失败：{str(payload)[:60]}",
-                                              foreground="#c0392b")
+                                              foreground=C_ERR)
+                    # 解析期间若有排队的地址，现在补跑一次
+                    if self._probe_pending and not (
+                            self.probe_worker and self.probe_worker.is_alive()):
+                        self._probe_pending = None
+                        self.root.after(30, self._probe_rec_source)
                 elif kind == "probed":
                     self._apply_probe(item[1])
                 elif kind == "dl_done":
@@ -946,10 +1405,10 @@ class App:
                     if path:
                         self.var_ffmpeg.set(path)
                         self.lbl_ff.config(text=ver.split("(")[0].strip(),
-                                           foreground="#1a7a3c")
+                                           foreground=C_OK)
                         self._log(f"ffmpeg 就绪：{ver}")
                     else:
-                        self.lbl_ff.config(text="未找到 ffmpeg", foreground="#c0392b")
+                        self.lbl_ff.config(text="未找到 ffmpeg", foreground=C_ERR)
                         self._log(ver)
                     self.nvenc_h264, self.nvenc_h265 = nv_h, nv_5
                     if nv_h or nv_5:
@@ -963,8 +1422,23 @@ class App:
     # ---------- 日志 ----------
 
     def _log(self, text):
+        """写日志，并按内容给关键行着色（重编码开关不影响可读性）。"""
+        low = text.lower()
+        if "✗" in text or "失败" in text or "错误" in text or "[error" in low \
+                or "error" in low:
+            tag = ("err",)
+        elif "✓" in text or "完成" in text or "成功" in text or " ok" in low:
+            tag = ("ok",)
+        elif "警告" in text or "warn" in low:
+            tag = ("warn",)
+        elif text.startswith("===="):
+            tag = ("accent",)
+        elif text.lstrip().startswith("["):
+            tag = ("muted",)
+        else:
+            tag = ()
         self.txt.config(state="normal")
-        self.txt.insert("end", text + "\n")
+        self.txt.insert("end", text + "\n", tag)
         lines = int(self.txt.index("end-1c").split(".")[0])
         if lines > 600:
             self.txt.delete("1.0", f"{lines - 400}.0")

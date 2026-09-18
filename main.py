@@ -60,6 +60,18 @@ def smoke(report_path):
         return "取址正常（且不跨协议回退）"
     check("copy-source-pick", _copy_pick)
 
+    def _history_cfg():
+        """「常看主播」靠 vt_config.json 持久化，确认读写往返不丢字段。"""
+        import tempfile
+        from pathlib import Path as _P
+        d = _P(tempfile.mkdtemp(prefix="vt_cfg_"))
+        want = [{"nick": "某主播", "rid": "123456", "input": "https://x", "ts": 1}]
+        core.save_config(d, {"history": want, "cq": 23})
+        got = core.load_config(d).get("history")
+        assert got == want, got
+        return f"history 往返正常（{len(got)} 条）"
+    check("config-roundtrip", _history_cfg)
+
     def _ffmpeg():
         p = core.find_ffmpeg()
         if not p:
