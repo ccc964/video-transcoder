@@ -3,6 +3,27 @@
 基于 ffmpeg 的视频批量转码/转封装 + 直播源录制工具。**交付只要一个 exe（12MB）**，
 换电脑拷过去双击即用，首次运行点一下「一键下载 ffmpeg」即可（约 82MB，实测 8 秒下完）。
 
+## 下载 / 安装
+
+**直接下载 exe（推荐，无需 Python）**
+
+👉 [VideoTranscoder.exe](https://github.com/ccc964/video-transcoder/releases/latest/download/VideoTranscoder.exe)（12.4 MB）
+
+首次运行点界面上的「一键下载 ffmpeg」即可，不需要单独装 Python 或 ffmpeg。
+
+**从源码跑**
+
+```bash
+git clone https://github.com/ccc964/video-transcoder.git
+cd video-transcoder
+pip install -r requirements.txt
+```
+
+Windows 下直接双击 `启动程序.bat`（会自动用本地 `.venv`）；想自己打包 exe 双击 `打包exe.bat`。
+
+> 国内直连 github.com 可能超时，clone/推送可套加速代理，例如把地址换成
+> `https://ghfast.top/https://github.com/ccc964/video-transcoder.git`。
+
 ## ffmpeg 从哪来（重要）
 
 - 程序启动会按顺序找 ffmpeg：**exe 同目录 → 同目录 ffmpeg\ 文件夹 → 系统 PATH → Chocolatey**。
