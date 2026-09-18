@@ -34,6 +34,7 @@ class App:
         self.rec_worker = None
         self.stop_event_rec = threading.Event()
         self.rec_start = 0.0
+        self.probe_worker = None
         self.dl_worker = None
         self.stop_event_dl = threading.Event()
         self.cfg = core.load_config(core.app_dir())
@@ -260,17 +261,38 @@ class App:
         r.columnconfigure(0, weight=1)
         r.columnconfigure(1, weight=0)
 
-        ttk.Label(r, text="直播源地址（m3u8 / flv / mp4 直链 / rtmp）：").grid(
+        ttk.Label(r, text="直播源地址：抖音直播间链接 / 房间号 / 分享短链 / 主页链接，"
+                          "或 m3u8 / flv / mp4 直链 / rtmp：").grid(
             row=0, column=0, columnspan=2, sticky="w",
             padx=padx(10), pady=(padx(14), 0))
         self.var_url = tk.StringVar()
         ttk.Entry(r, textvariable=self.var_url).grid(
             row=1, column=0, columnspan=2, sticky="ew", padx=padx(10), pady=padx(4))
 
-        ttk.Label(r, text="保存位置（留空=exe 同目录，自动按时间命名）：").grid(
-            row=2, column=0, columnspan=2, sticky="w", padx=padx(10))
+        # ---- 抖音解析行 ----
+        row_p = ttk.Frame(r)
+        row_p.grid(row=2, column=0, columnspan=2, sticky="w",
+                   padx=padx(10), pady=(padx(2), 0))
+        self.btn_probe = ttk.Button(row_p, text="解析画质", command=self._probe_rec_source)
+        self.btn_probe.pack(side="left")
+        ttk.Label(row_p, text="录制画质：").pack(side="left", padx=(padx(12), 0))
+        self.var_quality = tk.StringVar(value=core.AUTO_QUALITY)
+        self.cmb_quality = ttk.Combobox(row_p, textvariable=self.var_quality,
+                                        values=list(core.RECORD_QUALITIES),
+                                        state="readonly", width=16)
+        self.cmb_quality.pack(side="left", padx=padx(4))
+        self.lbl_probe = ttk.Label(row_p, text="", foreground="#888888")
+        self.lbl_probe.pack(side="left", padx=padx(10))
+
+        ttk.Label(r, text="（填抖音地址时点一下「解析画质」可看到主播与画质档位；"
+                          "直链地址无需解析，直接录制）",
+                  foreground="#888888").grid(
+            row=3, column=0, columnspan=2, sticky="w", padx=padx(10), pady=(padx(2), 0))
+
+        ttk.Label(r, text="保存位置（留空=按主播名+时间自动命名）：").grid(
+            row=4, column=0, columnspan=2, sticky="w", padx=padx(10), pady=(padx(8), 0))
         row_d = ttk.Frame(r)
-        row_d.grid(row=3, column=0, columnspan=2, sticky="ew", padx=padx(10))
+        row_d.grid(row=5, column=0, columnspan=2, sticky="ew", padx=padx(10))
         row_d.columnconfigure(0, weight=1)
         self.var_rec_dst = tk.StringVar()
         ttk.Entry(row_d, textvariable=self.var_rec_dst).grid(
@@ -278,26 +300,41 @@ class App:
         ttk.Button(row_d, text="…", width=3, command=self._pick_rec_dst).grid(row=0, column=1)
 
         row_o = ttk.Frame(r)
-        row_o.grid(row=4, column=0, columnspan=2, sticky="w", padx=padx(10), pady=(padx(10), 0))
+        row_o.grid(row=6, column=0, columnspan=2, sticky="w", padx=padx(10), pady=(padx(10), 0))
         ttk.Label(row_o, text="最长录制（分钟，0=不限）：").pack(side="left")
         self.var_rec_limit = tk.IntVar(value=0)
         ttk.Spinbox(row_o, from_=0, to=1440, textvariable=self.var_rec_limit,
                     width=6).pack(side="left", padx=padx(6))
         self.var_rec_reconnect = tk.BooleanVar(value=True)
-        ttk.Checkbutton(row_o, text="HTTP 直线断流自动重连",
+        ttk.Checkbutton(row_o, text="HTTP 直链断流自动重连",
                         variable=self.var_rec_reconnect).pack(side="left", padx=padx(10))
+        self.var_rec_wait = tk.BooleanVar(value=False)
+        ttk.Checkbutton(row_o, text="未开播时自动等待开录（每 30 秒重试）",
+                        variable=self.var_rec_wait).pack(side="left", padx=padx(10))
 
+        row_c1 = ttk.Frame(r)
+        row_c1.grid(row=7, column=0, columnspan=2, sticky="w", padx=padx(10), pady=(padx(6), 0))
         self.var_rec_mp4 = tk.BooleanVar(value=True)
-        ttk.Checkbutton(r, text="停止后自动无损转成 mp4（推荐，录制中间件为 ts 不会坏）",
-                        variable=self.var_rec_mp4).grid(
-            row=5, column=0, columnspan=2, sticky="w", padx=padx(10), pady=(padx(10), 0))
+        ttk.Checkbutton(row_c1, text="停止后自动无损转成 mp4（录制中间件为 ts，不会坏）",
+                        variable=self.var_rec_mp4).pack(side="left")
         self.var_rec_keep = tk.BooleanVar(value=False)
-        ttk.Checkbutton(r, text="保留录制的 ts 中间文件",
-                        variable=self.var_rec_keep).grid(
-            row=6, column=0, columnspan=2, sticky="w", padx=padx(10))
+        ttk.Checkbutton(row_c1, text="保留 ts 中间文件",
+                        variable=self.var_rec_keep).pack(side="left", padx=padx(12))
+
+        row_c2 = ttk.Frame(r)
+        row_c2.grid(row=8, column=0, columnspan=2, sticky="w", padx=padx(10), pady=(padx(4), 0))
+        self.var_rec_transcode = tk.BooleanVar(value=False)
+        ttk.Checkbutton(row_c2, text="录完自动重编码：",
+                        variable=self.var_rec_transcode).pack(side="left")
+        self.var_rec_tmode = tk.StringVar(value=core.TRANSCODE_MODES[0][1])
+        ttk.Combobox(row_c2, textvariable=self.var_rec_tmode, state="readonly", width=22,
+                     values=[txt for _, txt in core.TRANSCODE_MODES]).pack(side="left",
+                                                                          padx=padx(4))
+        ttk.Label(row_c2, text="（质量档沿用「视频转码」页的 CQ 设置）",
+                  foreground="#888888").pack(side="left", padx=padx(6))
 
         row_r = ttk.Frame(r)
-        row_r.grid(row=7, column=0, columnspan=2, sticky="w", padx=padx(10), pady=padx(14))
+        row_r.grid(row=9, column=0, columnspan=2, sticky="w", padx=padx(10), pady=padx(14))
         self.btn_rec_start = ttk.Button(row_r, text="开始录制", command=self._start_rec)
         self.btn_rec_start.pack(side="left")
         self.btn_rec_stop = ttk.Button(row_r, text="停止录制", command=self._stop_rec,
@@ -309,8 +346,8 @@ class App:
         self.pbar_rec.pack(side="left")
 
         ttk.Label(r, text="提示：录制全程不重编码（-c copy），CPU 占用极低；"
-                          "点「停止录制」后自动封装为 mp4。").grid(
-            row=8, column=0, columnspan=2, sticky="w", padx=padx(10), pady=(padx(6), padx(10)))
+                          "抖音地址会先自动解析出推流地址再录制。").grid(
+            row=10, column=0, columnspan=2, sticky="w", padx=padx(10), pady=(padx(6), padx(10)))
 
     def _pick_rec_dst(self):
         p = filedialog.asksaveasfilename(title="选择录制保存位置",
@@ -318,6 +355,50 @@ class App:
                                          filetypes=[("视频", "*.mp4 *.ts *.mkv *.flv")])
         if p:
             self.var_rec_dst.set(p)
+
+    # ---------- 抖音解析 ----------
+
+    def _probe_rec_source(self):
+        """解析抖音直播间，填充画质下拉框（不开始录制）。"""
+        url = self.var_url.get().strip()
+        if not url:
+            messagebox.showinfo("提示", "请先填直播源地址")
+            return
+        if not core.is_douyin_input(url):
+            self.lbl_probe.config(text="非抖音地址，直接录制", foreground="#1a7a3c")
+            return
+        if self.probe_worker and self.probe_worker.is_alive():
+            return
+        self.btn_probe.config(state="disabled")
+        self.lbl_probe.config(text="解析中…", foreground="#888888")
+        self.probe_worker = threading.Thread(target=self._work_probe, args=(url,), daemon=True)
+        self.probe_worker.start()
+
+    def _work_probe(self, url):
+        try:
+            room = core.probe_live_room(url, on_log=lambda t: self._qlog(t))
+            self.q.put(("probe", True, room))
+        except Exception as e:
+            self.q.put(("probe", False, f"{e}"))
+
+    def _apply_probe(self, room):
+        """把探测结果填进画质下拉框和状态标签。"""
+        avail = (room or {}).get("available") or []
+        values = [core.AUTO_QUALITY] + avail
+        self.cmb_quality.config(values=values)
+        if self.var_quality.get() not in values:
+            self.var_quality.set(values[0] if avail else core.AUTO_QUALITY)
+        nick = room.get("nickname") or "未知主播"
+        if room.get("is_live"):
+            text = f"✓ {nick} · 直播中 · {len(avail)} 档画质"
+            self.lbl_probe.config(text=text, foreground="#1a7a3c")
+        else:
+            text = f"✗ {nick} · 未开播"
+            if avail:
+                text += f" · 已缓存 {len(avail)} 档地址"
+            self.lbl_probe.config(text=text, foreground="#c0392b")
+
+    # ---------- 录制 ----------
 
     def _start_rec(self):
         if self.rec_worker and self.rec_worker.is_alive():
@@ -332,31 +413,23 @@ class App:
             messagebox.showinfo("提示", "请先填直播源地址")
             return
         dst_in = self.var_rec_dst.get().strip()
-        if dst_in:
-            dst = Path(dst_in)
-            if dst.suffix.lower() not in (".mp4", ".ts", ".mkv", ".flv"):
-                dst = dst.with_suffix(".ts")
-        else:
-            base = self.var_outdir.get().strip() or str(core.app_dir())
-            dst = Path(base) / f"直播_{time.strftime('%Y%m%d_%H%M%S')}.mp4"
-        if dst.exists():
-            dst = core.unique_dst(dst)
         limit_min = int(self.var_rec_limit.get() or 0)
-        to_mp4 = dst.suffix.lower() == ".mp4" or self.var_rec_mp4.get()
-        if dst.suffix.lower() == ".ts":
-            to_mp4 = False
-        tmp_ts = dst.with_suffix(".ts") if dst.suffix.lower() != ".ts" else dst
         self.stop_event_rec.clear()
         self._set_rec_running(True)
         self._save_cfg()
-        self.q.put(("log", f"==== 开始录制：{url}"))
-        self.q.put(("log", f"     保存到 {dst}，最长 {limit_min if limit_min else '不限'} 分钟"))
+        self.q.put(("log", "==== 开始录制：" + url))
         self.rec_start = time.time()
         self.rec_worker = threading.Thread(
             target=self._work_rec,
-            args=(ffmpeg, url, tmp_ts, dst, limit_min * 60,
+            args=(ffmpeg, url, dst_in, limit_min * 60,
                   bool(self.var_rec_reconnect.get()),
-                  bool(self.var_rec_keep.get()), to_mp4),
+                  bool(self.var_rec_keep.get()),
+                  bool(self.var_rec_mp4.get()),
+                  bool(self.var_rec_wait.get()),
+                  self.var_quality.get(),
+                  core.mode_from_label(self.var_rec_tmode.get())
+                  if self.var_rec_transcode.get() else None,
+                  int(self.var_cq.get())),
             daemon=True)
         self.rec_worker.start()
         self._tick_rec()
@@ -368,6 +441,7 @@ class App:
     def _set_rec_running(self, running):
         self.btn_rec_start.config(state="disabled" if running else "normal")
         self.btn_rec_stop.config(state="normal" if running else "disabled")
+        self.btn_probe.config(state="disabled" if running else "normal")
         if running:
             self.pbar_rec.start(12)
             self.lbl_rec.config(text="录制中…")
@@ -380,9 +454,63 @@ class App:
             self.lbl_rec.config(text=f"录制中 {secs // 3600:02d}:{secs % 3600 // 60:02d}:{secs % 60:02d}")
             self.root.after(1000, self._tick_rec)
 
-    def _work_rec(self, ffmpeg, url, tmp_ts, dst, limit_sec, reconnect, keep_ts, need_remux):
+    def _work_rec(self, ffmpeg, url, dst_in, limit_sec, reconnect, keep_ts,
+                  need_mp4, wait_live, quality, tmode, cq):
         try:
-            args = core.build_record_command(url, tmp_ts, limit_sec, reconnect)
+            # ---- 1. 解析（抖音地址才会真正联网解析，直链原样返回）----
+            if core.is_douyin_input(url):
+                self._qlog("    正在解析直播源 …")
+            try:
+                stream_url, info = core.prepare_record_source(
+                    url,
+                    quality=None if quality == core.AUTO_QUALITY else quality,
+                    wait=wait_live,
+                    stop_event=self.stop_event_rec,
+                    on_log=lambda t: self._qlog(t))
+            except Exception as exc:
+                self._qlog(f"解析失败 ✗ {exc}")
+                self.q.put(("recdone", False))
+                return
+
+            if info.get("cancelled"):
+                self._qlog("已取消（等待开播中断）")
+                self.q.put(("recdone", False))
+                return
+
+            if info.get("douyin"):
+                nick = info.get("nickname") or "未知主播"
+                title = (info.get("title") or "").strip()
+                self._qlog(f"    主播：{nick}　画质：{info.get('quality')}　"
+                           f"room_id：{info.get('room_id')}")
+                if title:
+                    self._qlog(f"    标题：{title[:60]}")
+                self.q.put(("probed", info))
+
+            # ---- 2. 决定保存路径 ----
+            if dst_in:
+                dst = Path(dst_in)
+                if dst.suffix.lower() not in (".mp4", ".ts", ".mkv", ".flv"):
+                    dst = dst.with_suffix(".ts")
+            else:
+                base = self.var_outdir.get().strip() or str(core.app_dir())
+                prefix = (info.get("nickname") or "").strip() or "直播"
+                prefix = re.sub(r'[\\/:*?"<>|]', "_", prefix)[:40]
+                dst = Path(base) / f"{prefix}_{time.strftime('%Y%m%d_%H%M%S')}.mp4"
+            try:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                pass
+            if dst.exists():
+                dst = core.unique_dst(dst)
+
+            to_mp4 = need_mp4
+            if dst.suffix.lower() == ".ts":
+                to_mp4 = False
+            tmp_ts = dst.with_suffix(".ts") if dst.suffix.lower() != ".ts" else dst
+            self._qlog(f"    保存到 {dst}，最长 {limit_sec // 60 if limit_sec else '不限'} 分钟")
+
+            # ---- 3. 录制 ----
+            args = core.build_record_command(stream_url, tmp_ts, limit_sec, reconnect)
             okk, msg = core.run_ffmpeg(
                 ffmpeg, args, duration=None,
                 on_log=lambda t: self._qlog("    " + t),
@@ -393,7 +521,10 @@ class App:
                 self.q.put(("recdone", False))
                 return
             size = tmp_ts.stat().st_size / 1048576
-            if need_remux and str(tmp_ts.resolve()) != str(dst.resolve()):
+
+            # ---- 4. 无损封装 ----
+            final = tmp_ts
+            if to_mp4 and str(tmp_ts.resolve()) != str(dst.resolve()):
                 self._qlog(f"    收到 {size:.1f} MB，正在无损封装为 {dst.name} …")
                 rok, rmsg = core.run_ffmpeg(
                     ffmpeg, core.remux_command(tmp_ts, dst), duration=None,
@@ -404,15 +535,47 @@ class App:
                             tmp_ts.unlink()
                         except Exception:
                             pass
+                    final = dst
                     self._qlog(f"    完成 ✓ {dst.name} {dst.stat().st_size / 1048576:.1f} MB")
                 else:
                     self._qlog(f"    封装失败 ✗ {rmsg}（ts 中间文件已保留：{tmp_ts.name}）")
+                    self.q.put(("recdone", True))
+                    return
             else:
                 self._qlog(f"    完成 ✓ {dst.name} {size:.1f} MB")
+
+            # ---- 5. 可选：录完自动重编码 ----
+            if tmode and final.is_file():
+                self._auto_transcode(ffmpeg, final, tmode, cq)
+
             self.q.put(("recdone", True))
         except Exception as e:
             self._qlog(f"[异常] {e}")
             self.q.put(("recdone", False))
+
+    def _auto_transcode(self, ffmpeg, src, mode, cq):
+        """录制结束后按「视频转码」页的模式设置做一次重编码。"""
+        label = core.label_from_mode(mode)
+        tgt = core.unique_dst(src.with_name(f"{src.stem}_{mode}{src.suffix}"))
+        self._qlog(f"    自动重编码（{label}）→ {tgt.name} …")
+        args, _ = core.build_command(mode, cq, src, tgt,
+                                     nvenc_h264=self.nvenc_h264,
+                                     nvenc_h265=self.nvenc_h265)
+        ok, msg = core.run_ffmpeg(
+            ffmpeg, args, duration=core.media_duration(core.find_ffprobe(ffmpeg), src),
+            on_progress=lambda f: self.q.put(("progress", f)),
+            on_log=lambda t: self._qlog("    " + t),
+            stop_event=self.stop_event_rec)
+        if ok and tgt.is_file():
+            self._qlog(f"    重编码完成 ✓ {tgt.name} {tgt.stat().st_size / 1048576:.1f} MB")
+        else:
+            self._qlog(f"    重编码失败 ✗ {msg}")
+            try:
+                if tgt.exists() and tgt.stat().st_size == 0:
+                    tgt.unlink()
+            except Exception:
+                pass
+
 
     # ---------- ffmpeg 检测 ----------
 
@@ -482,6 +645,20 @@ class App:
             self.var_cq.set(c["cq"])
         self.lbl_cq.config(text=str(self.var_cq.get()))
         self._mode_changed()
+        # 直播录制设置
+        if c.get("rec_quality"):
+            self.var_quality.set(c["rec_quality"])
+        for key, var in (("rec_reconnect", self.var_rec_reconnect),
+                         ("rec_wait", self.var_rec_wait),
+                         ("rec_mp4", self.var_rec_mp4),
+                         ("rec_keep", self.var_rec_keep),
+                         ("rec_transcode", self.var_rec_transcode)):
+            if isinstance(c.get(key), bool):
+                var.set(c[key])
+        if c.get("rec_tmode") in [txt for _, txt in core.TRANSCODE_MODES]:
+            self.var_rec_tmode.set(c["rec_tmode"])
+        if isinstance(c.get("rec_limit"), int) and c["rec_limit"] >= 0:
+            self.var_rec_limit.set(c["rec_limit"])
 
     def _mode_changed(self):
         is_copy = self.var_mode.get() == "copy"
@@ -504,6 +681,15 @@ class App:
             "mode": self.var_mode.get(),
             "format": self.var_format.get(),
             "cq": int(self.var_cq.get()),
+            # 直播录制
+            "rec_quality": self.var_quality.get(),
+            "rec_reconnect": bool(self.var_rec_reconnect.get()),
+            "rec_wait": bool(self.var_rec_wait.get()),
+            "rec_mp4": bool(self.var_rec_mp4.get()),
+            "rec_keep": bool(self.var_rec_keep.get()),
+            "rec_transcode": bool(self.var_rec_transcode.get()),
+            "rec_tmode": self.var_rec_tmode.get(),
+            "rec_limit": int(self.var_rec_limit.get() or 0),
         })
 
     # ---------- 运行 ----------
@@ -613,6 +799,16 @@ class App:
                 elif kind == "recdone":
                     self._set_rec_running(False)
                     self.lbl_rec.config(text="已结束")
+                elif kind == "probe":
+                    _, ok, payload = item
+                    self.btn_probe.config(state="normal")
+                    if ok and payload:
+                        self._apply_probe(payload)
+                    else:
+                        self.lbl_probe.config(text=f"解析失败：{str(payload)[:60]}",
+                                              foreground="#c0392b")
+                elif kind == "probed":
+                    self._apply_probe(item[1])
                 elif kind == "dl_done":
                     _, ok, msg = item
                     self.btn_ff.config(text="一键下载 ffmpeg")

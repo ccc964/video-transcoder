@@ -93,6 +93,8 @@ def main():
            "--specpath", str(ROOT / "build"),
            "--collect-all", "tkinterdnd2",
            "--hidden-import", "PIL._tkinter_finder",
+           # 抖音直播源解析模块（纯标准库，显式声明避免被漏掉）
+           "--hidden-import", "douyin",
            str(ROOT / "main.py")]
     print(" ".join(cmd))
     try:

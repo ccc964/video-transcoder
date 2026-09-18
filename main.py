@@ -29,6 +29,21 @@ def smoke(report_path):
     check("python", lambda: sys.version.split()[0])
     check("engine-import", lambda: ("ok"))
 
+    def _douyin():
+        import douyin
+        assert douyin.is_douyin_input("https://live.douyin.com/123456")
+        assert not douyin.is_douyin_input("https://a.com/x.m3u8")
+        assert douyin.normalize_quality("or4") == "原画 (OR4)"
+        return f"解析器就绪，{len(core.RECORD_QUALITIES)} 档画质选项"
+    check("douyin-engine", _douyin)
+
+    def _resolve():
+        """解析函数必须存在且对直链是透传的（不联网）。"""
+        url, info = core.prepare_record_source("http://example.com/live.m3u8")
+        assert url == "http://example.com/live.m3u8" and info["douyin"] is False
+        return "直链透传正常"
+    check("record-source-passthrough", _resolve)
+
     def _ffmpeg():
         p = core.find_ffmpeg()
         if not p:

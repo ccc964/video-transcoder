@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import douyin
+
 CFG_NAME = "vt_config.json"
 VIDEO_EXTS = {".ts", ".mp4", ".mkv", ".mov", ".avi", ".flv", ".wmv",
               ".webm", ".m4v", ".mpg", ".mpeg", ".3gp", ".mts", ".m2ts"}
@@ -346,6 +348,113 @@ def install_ffmpeg(target_dir=None, on_progress=None, on_log=None,
                 on_log(f"    失败：{e}")
     return False, "所有下载地址都失败了（可在界面手动粘贴 zip 直链重试）：\n" + "\n".join(errors[-6:])
 
+
+
+# ---------- 直播源解析（抖音） ----------
+# 把「抖音直播间链接 / 房间号 / App 分享短链 / 用户主页链接」解析成 ffmpeg 可直接
+# 录制的推流地址。非抖音输入原样透传，因此填入 m3u8/flv/rtmp 直链时行为完全不变。
+#
+# 解析逻辑全在 douyin.py（纯标准库，不新增任何第三方依赖）。
+
+# 界面下拉框用的画质选项，第 0 项是「自动」
+RECORD_QUALITIES = douyin.quality_labels()
+AUTO_QUALITY = RECORD_QUALITIES[0]
+
+# 「录完自动重编码」可选模式（copy 无意义，这里只列真正的重编码）
+TRANSCODE_MODES = (
+    ("h264", "H.264 重编码（兼容性最好）"),
+    ("h265", "H.265 重编码（体积最小）"),
+)
+
+
+def mode_from_label(label):
+    """界面文案 → 模式名，未命中返回 None。"""
+    for mode, text in TRANSCODE_MODES:
+        if text == label:
+            return mode
+    return None
+
+
+def label_from_mode(mode):
+    """模式名 → 界面文案。"""
+    for m, text in TRANSCODE_MODES:
+        if m == mode:
+            return text
+    return mode or ""
+
+
+def normalize_quality(text):
+    """把 or4 / 原画 / 原画 (OR4) 统一成画质全名；auto 或空返回 None（表示自动）。"""
+    return douyin.normalize_quality(text)
+
+
+def is_douyin_input(text) -> bool:
+    """输入是否需要走抖音解析。"""
+    return douyin.is_douyin_input(text or "")
+
+
+def probe_live_room(url, on_log=None):
+    """只探测直播间信息，不要求已开播（供界面「解析画质」按钮 / CLI --list 用）。
+
+    返回 room dict，额外带 ``available``（可选画质列表）。
+    非抖音输入返回 None。
+    """
+    if not is_douyin_input(url):
+        return None
+    room = douyin.DouyinLiveExtractor(on_log=on_log).resolve(url)
+    room["available"] = douyin.available_qualities(room.get("streams", {}))
+    return room
+
+
+def prepare_record_source(url, quality=None, wait=False, interval=30, timeout=0,
+                          stop_event=None, on_log=None, prefer="flv"):
+    """把录制输入统一解析成可录制的推流地址。
+
+    返回 (stream_url, info)：
+
+    - 非抖音输入     → (原样 url, {"douyin": False})
+    - 抖音且解析成功 → (真实推流地址, {"douyin": True, "nickname": …, …})
+    - 等待开播被取消 → (None, {"douyin": True, "cancelled": True})
+
+    解析失败抛 douyin.DouyinError；未开播且未开启等待时抛 douyin.NotLiveError。
+    """
+    url = (url or "").strip()
+    if not is_douyin_input(url):
+        return url, {"douyin": False}
+
+    log = on_log or (lambda t: None)
+    extractor = douyin.DouyinLiveExtractor(on_log=log)
+
+    room = extractor.resolve(url)
+    if not douyin.is_ready(room):
+        if not wait:
+            who = room.get("nickname") or "该主播"
+            state = "未开播" if not room.get("is_live") else "已开播但暂未取到流地址"
+            raise douyin.NotLiveError(f"{who} {state}")
+        log("尚未开播，进入等待模式（点「停止」可随时取消）…")
+        room = douyin.wait_until_live(extractor, url, interval=interval,
+                                      timeout=timeout, stop_event=stop_event,
+                                      on_log=log)
+        if room is None:
+            return None, {"douyin": True, "cancelled": True}
+
+    picked, stream_url = douyin.pick_url(room["streams"], quality, prefer=prefer)
+    if not stream_url:
+        avail = "、".join(douyin.available_qualities(room["streams"])) or "无"
+        raise douyin.DouyinError(f"该直播间没有画质「{quality}」，可选：{avail}")
+
+    return stream_url, {
+        "douyin": True,
+        "cancelled": False,
+        "is_live": True,
+        "nickname": room.get("nickname") or "",
+        "title": room.get("title") or "",
+        "room_id": room.get("room_id"),
+        "web_rid": room.get("web_rid"),
+        "quality": picked,
+        "available": douyin.available_qualities(room["streams"]),
+        "live_url": room.get("live_url") or "",
+    }
 
 
 # ---------- 直播录制 ----------

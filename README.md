@@ -3,6 +3,9 @@
 基于 ffmpeg 的视频批量转码/转封装 + 直播源录制工具。**交付只要一个 exe（12MB）**，
 换电脑拷过去双击即用，首次运行点一下「一键下载 ffmpeg」即可（约 82MB，实测 8 秒下完）。
 
+**直播录制支持抖音直播间直接开录**：粘贴直播间链接、房间号、App 分享短链或用户主页链接，
+工具自动解析出推流地址再录制，不用自己去抓流。
+
 ## 下载 / 安装
 
 **直接下载 exe（推荐，无需 Python）**
@@ -62,11 +65,25 @@ Windows 下直接双击 `启动程序.bat`（会自动用本地 `.venv`）；想
 把视频拖进窗口（或点「添加文件/添加文件夹」）→ 选模式和格式 → 开始转换。
 
 ### 页签 2：直播录制
-1. 粘贴直播源地址（m3u8 / flv / mp4 直链 / rtmp）
-2. 保存位置留空则自动命名为 `直播_日期_时间.mp4`
-3. 点「开始录制」，随时点「停止录制」
-4. 停止后自动无损封装成 mp4（录制过程用 ts 中间文件，中途断电/停止文件也不会坏）
-5. 可设最长录制分钟数（0=不限）；HTTP 直链断流会自动重连
+
+1. 粘贴**直播源地址**：
+   - 抖音：直播间链接 / 房间号 / App 分享短链 / 用户主页链接 —— 会自动解析
+   - 或任意 `m3u8` / `flv` / `mp4` 直链 / `rtmp` —— 直接录制，不走解析
+2. （可选）点 **「解析画质」**：显示主播昵称、开播状态，并把画质下拉框收敛成该直播间真实可用的档位
+3. （可选）选 **录制画质**：默认「自动（最高画质）」，也可指定原画 / 高清 / 标清 / 流畅
+4. 保存位置留空则自动命名为 `主播名_日期_时间.mp4`（非抖音源为 `直播_日期_时间.mp4`）
+5. 点「开始录制」，随时点「停止录制」
+6. 停止后自动无损封装成 mp4（录制过程用 ts 中间文件，中途断电/停止文件也不会坏）
+
+几个好用的勾选项：
+
+| 选项 | 作用 |
+|---|---|
+| HTTP 直链断流自动重连 | 网络抖动导致断流时自动续录（默认开） |
+| 未开播时自动等待开录 | 每 30 秒重试一次，主播一开播就自动开始录；点「停止」可取消 |
+| 停止后自动无损转成 mp4 | 用 ts 中间文件录制，停止后封装（默认开） |
+| 保留 ts 中间文件 | 想留原始流时勾上 |
+| 录完自动重编码 | 录完接着按 H.264 / H.265 重编码一遍，质量档沿用「视频转码」页的 CQ |
 
 录制全程 `-c copy` 不重编码，CPU/显卡几乎零占用。
 
@@ -78,6 +95,17 @@ Windows 下直接双击 `启动程序.bat`（会自动用本地 `.venv`）；想
 视频转码.exe --cli --install-ffmpeg -o D:\目标目录
 
 视频转码.exe --cli --record "https://xxx/live.m3u8" -o D:\录制.mp4 --limit 120
+
+# 抖音直播间直接录（画质自动取最高）
+视频转码.exe --cli --record 123456789 -o D:\正茶司_直播.mp4
+
+# 先看看有哪些画质，再按时长和画质录
+视频转码.exe --cli --record https://live.douyin.com/123456789 --list
+视频转码.exe --cli --record 123456789 --quality or4 --limit 180 --transcode h265
+
+# 主播还没开播：挂着等，开播自动开始录
+视频转码.exe --cli --record 123456789 --wait
+视频转码.exe --cli --record 123456789 --wait 3600
 ```
 
 转码参数：
@@ -89,13 +117,57 @@ Windows 下直接双击 `启动程序.bat`（会自动用本地 `.venv`）；想
 - `-o 目录`   输出目录（默认与源文件同目录）
 
 录制参数：
-- `--record URL`  直播源地址
-- `-o 文件`       保存位置（.mp4/.ts/.mkv/.flv）
-- `--limit 120`   最长录制分钟数，0=不限
+- `--record URL`   直播源：抖音直播间链接 / 房间号 / 分享短链 / 主页链接，或 m3u8 / flv / rtmp
+- `-o 文件`        保存位置（.mp4/.ts/.mkv/.flv），留空则按主播名+时间自动命名
+- `--limit 120`    最长录制分钟数，0=不限
+- `--quality NAME` 录制画质：`auto`（默认，最高可用）/ `or4` / `uhd` / `hd` / `sd` / `ld`
+- `--list`         只解析并列出可用画质，不录制
+- `--wait [SEC]`   未开播时等待开播再录；SEC 可选，不写=不限时长
+- `--transcode MODE` 录完自动重编码：`h264` / `h265`
 
 安装参数：
 - `--install-ffmpeg`          下载安装 ffmpeg 到 exe 同目录 ffmpeg\（-o 可指定目标目录）
 - `--ffmpeg-url URL`          配合 --install-ffmpeg：手动指定 zip 直链（自动源全失败时用）
+
+## 抖音直播源解析怎么做的
+
+解析逻辑全在 `douyin.py`，**纯 Python 标准库，不引入任何第三方依赖**，
+因此 exe 体积几乎没变化（不打包浏览器内核）。
+
+### 支持哪些输入
+
+| 输入 | 示例 | 是否需要额外组件 |
+|---|---|---|
+| 房间号 | `123456789` | 不需要 |
+| 直播间链接 | `https://live.douyin.com/123456789` | 不需要 |
+| App 分享短链 | `https://v.douyin.com/xxxxx/` | 不需要 |
+| 带文案的分享文本 | `8.88 复制打开抖音… https://v.douyin.com/xxx/` | 不需要 |
+| 用户主页链接 | `https://www.douyin.com/user/MS4wLjAB…` | **需要本机有 Edge / Chrome** |
+
+前四种走纯 HTTP，速度快、零依赖。**用户主页链接**是唯一需要渲染 JS 的场景：
+抖音主页是 SPA，直接抓 HTML 只能拿到约 72KB 的空壳。
+这时工具会调用本机自带的 Edge / Chrome 的 headless 模式取渲染后的 DOM：
+
+```
+msedge.exe --headless=new --disable-gpu --user-data-dir=<临时目录> \
+           --virtual-time-budget=8000 --dump-dom "https://www.douyin.com/user/<sec_uid>"
+```
+
+Windows 默认自带 Edge，所以**不需要为此下载任何东西**（这也是不打包 Chromium 内核的原因，
+那会多出约 700MB）。可以用环境变量 `DOUYIN_BROWSER=0` 关掉这个兜底。
+
+### 提取策略（三级）
+
+1. **结构化提取**：从页面 `RENDER_DATA` 里解析 `flv_pull_url` / `hls_pull_url_map`
+2. **全页文本搜索**：正则匹配 `or4.flv` / `hd.flv` / `*.m3u8` 等后缀
+3. **Webcast API 兜底**：前两步拿不全时，调抖音接口补齐
+
+解析出多种画质（原画 OR4 / 超清 UHD / 高清 HD / 标清 SD / 流畅 LD）和两种协议
+（FLV / HLS）。录制默认优先 FLV —— 它是连续流，配合 `-c copy` 录制更省事。
+
+> **长录制注意**：抖音推流地址带签名有效期。如果超长录制中途遇到签名过期导致断流，
+> 停止后重新点一次录制即可（工具默认会自动重连 10 次以内的抖动）。
+
 
 ## 转码模式怎么选
 
@@ -121,6 +193,35 @@ Windows 下直接双击 `启动程序.bat`（会自动用本地 `.venv`）；想
 调试启动.bat   → 带控制台调试
 打包exe.bat    → 重新打包 exe 到 dist\（自动内置 ffmpeg）
 selftest.py    → 引擎自检
+test_douyin.py → 抖音解析测试
+record_test.py → 直播录制测试
+```
+
+### 文件职责
+
+| 文件 | 作用 |
+|---|---|
+| `core.py` | 转码引擎 + ffmpeg 查找/下载 + **`prepare_record_source()` 录制源解析** |
+| `douyin.py` | 抖音直播源解析（**纯标准库**，可单独使用） |
+| `app.py` | tkinter 图形界面 |
+| `cli.py` | 命令行入口 |
+| `main.py` | 统一入口：无参数开界面 / `--cli` / `--smoke` 自检 |
+
+`douyin.py` 不依赖本项目任何东西，想单独拿去做别的用途直接拷走即可：
+
+```python
+import douyin
+room = douyin.DouyinLiveExtractor().resolve("123456789")
+print(room["nickname"], douyin.available_qualities(room["streams"]))
+quality, url = douyin.pick_url(room["streams"])      # 自动取最高画质
+```
+
+跑测试：
+
+```bash
+python test_douyin.py                     # 离线用例（输入识别 / 画质选择 / 直链透传）
+python test_douyin.py 123456789           # 加上真实解析
+python test_douyin.py 123456789 --record  # 再录 6 秒验证能出流
 ```
 
 ## 常用 ffmpeg 命令速查（本工具等价命令）
@@ -155,5 +256,10 @@ ffprobe -v error -show_format -show_streams 输入.mp4
 
 - 换电脑后提示找不到 ffmpeg：确认 `ffmpeg\ffmpeg.exe` 和 exe 在同一文件夹；也可在界面手动指定。
 - 录制没有数据：地址失效或需要特定 Referer 的源暂不支持，换个源试试。
+- 抖音链接解析失败：
+  - 提示「未开播」→ 主播确实没开播，勾上「未开播时自动等待开录」或先用 `--list` 确认状态。
+  - 提示找不到 Edge / Chrome → 只有**用户主页链接**需要浏览器渲染，改用直播间链接、房间号或
+    App 分享短链即可（这三种纯 HTTP 可解）。也可装个 Edge 后重试。
+  - 提示「未能解析到直播间」→ 链接可能无效，或抖音改了页面结构，用 `--list` 看详细输出。
 - 打包后闪退：运行 `视频转码.exe --smoke D:\smoke.txt`，看报告里的 FAIL 项。
 - 无损模式报错：个别容器/编码组合不能直接转封装，改用 H.264 模式或输出为 mkv。
